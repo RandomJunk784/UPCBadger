@@ -1,0 +1,6 @@
+name = "upcbadger-profile"
+main = "src/index.js"
+compatibility_date = "2026-09-22"
+
+[secrets]
+required = ["OPENXBL_API_KEY"]
