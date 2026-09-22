@@ -119,6 +119,26 @@
 #define CBP_DATA_OFFSET \
   (CBP_HEADER_BYTES + FRAME_COUNT_EXPECTED * CBP_INDEX_ENTRY_BYTES)
 
+// ============================================================
+// BOOT FADE / STATIC-SCREEN PROTECTION
+// ============================================================
+
+#define BOOT_FADE_FRAMES 27
+#define STATIC_PROTECT_INTERVAL_MS (5UL * 60UL * 1000UL)
+#define STATIC_BLACK_HOLD_MS 1000UL
+#define PROTECT_FADE_STEPS 8
+#define PROTECT_FADE_STEP_MS 60UL
+
+// Palette brightness multiplier used by the playback path.
+// 255 = normal, 0 = black.
+static uint8_t paletteFade = 255;
+
+// Final animation frame is also our temporary static-screen image.
+static const uint32_t STATIC_FRAME_INDEX =
+  FRAME_COUNT_EXPECTED - 1;
+
+static uint32_t staticScreenStartedMs = 0;
+
 // Palette = 256 RGB565 entries = 512 bytes.
 #define PALETTE_ENTRIES 256
 #define PALETTE_BYTES   (PALETTE_ENTRIES * 2)
@@ -611,6 +631,41 @@ static bool loadCBPIndex(File &file)
 }
 
 // ============================================================
+// FADE RGB565 PALETTE
+// ============================================================
+
+static uint16_t fadeRGB565(
+  uint16_t c,
+  uint8_t amount
+)
+{
+  if (amount == 255)
+    return c;
+
+  if (amount == 0)
+    return 0;
+
+  uint32_t r = (c >> 11) & 0x1F;
+  uint32_t g = (c >> 5)  & 0x3F;
+  uint32_t b = c & 0x1F;
+
+  r = (r * amount + 127) / 255;
+  g = (g * amount + 127) / 255;
+  b = (b * amount + 127) / 255;
+
+  return (uint16_t)(
+    (r << 11) |
+    (g << 5) |
+    b
+  );
+}
+
+static void setPaletteFade(uint8_t amount)
+{
+  paletteFade = amount;
+}
+
+// ============================================================
 // LOAD FRAME PALETTE
 // ============================================================
 
@@ -624,6 +679,20 @@ static bool loadPalette(StageReader &reader)
     stageBuffer + reader.beginPos,
     PALETTE_BYTES
   );
+
+  if (paletteFade != 255)
+  {
+    for (size_t i = 0;
+         i < PALETTE_ENTRIES;
+         ++i)
+    {
+      palette565[i] =
+        fadeRGB565(
+          palette565[i],
+          paletteFade
+        );
+    }
+  }
 
   reader.beginPos +=
     PALETTE_BYTES;
@@ -929,73 +998,3 @@ static bool playFramePipelined(
       "ERROR: pixels sent "
     );
     Serial.print(pixelsSent);
-    Serial.print(" expected ");
-    Serial.println(FRAME_PIXELS);
-    return false;
-  }
-
-  sdUs =
-    (uint32_t)reader.sdUs;
-
-  stageUs =
-    (uint32_t)reader.stageUs;
-
-  return true;
-}
-
-
-// ============================================================
-// SETUP
-// ============================================================
-
-void setup()
-{
-  Serial.begin(115200);
-  delay(300);
-
-  // ----------------------------------------------------------
-  // Allocate staging.
-  // ----------------------------------------------------------
-  stageBuffer =
-    (uint8_t *)malloc(96 * 1024);
-
-  if (!stageBuffer)
-  {
-    while (true)
-      delay(1000);
-  }
-
-  // ----------------------------------------------------------
-  // TFT.
-  // ----------------------------------------------------------
-  if (!tft.init())
-  {
-    while (true)
-      delay(1000);
-  }
-
-  tft.setRotation(0);
-  tft.setColorDepth(16);
-  tft.setSwapBytes(false);
-  tft.initDMA();
-  tft.fillScreen(TFT_BLACK);
-
-  // ----------------------------------------------------------
-  // SD.
-  // ----------------------------------------------------------
-  sdSPI.begin(
-    SD_SCLK,
-    SD_MISO,
-    SD_MOSI,
-    SD_CS
-  );
-
-  if (!SD.begin(
-        SD_CS,
-        sdSPI,
-        SD_SPI_HZ
-      ))
-  {
-    while (true)
-      delay(1000);
-The requested file reference is not currently visible. Use files.search or files.list to rediscover the file, then retry with a returned ref_id or file_id.
