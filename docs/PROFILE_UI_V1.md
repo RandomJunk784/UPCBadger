@@ -13,6 +13,8 @@ First boot: power on -> UPCBadger creates temporary setup Wi-Fi -> phone connect
 
 Later setup: hold rear CONFIG button for about 3 seconds -> setup mode.
 
+Factory re-provisioning: hold the same button for 15 seconds, then release -> clear stored Wi-Fi/Gamertag settings -> enter setup mode for a new owner/Gamertag. The 15-second action is evaluated on button release so the 3-second setup action cannot trigger during a factory reset hold.
+
 ## Physical button
 Reserve GPIO32.
 GPIO32 -> momentary button -> GND.
