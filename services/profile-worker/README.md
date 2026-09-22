@@ -1,59 +1,23 @@
-
 # UPCBadger Profile Worker — V1
 
-Minimal Cloudflare Worker for the first UPCBadger Xbox profile prototype.
+Prototype cloud endpoint for the UPCBadger Xbox profile layer.
 
-## Purpose
+Endpoint: GET /profile?gamertag=YOUR_GAMERTAG
 
-The badge will eventually call:
+The Worker checks a 15-minute edge cache, calls OpenXBL on a cache miss, and returns only gamertag, gamerscore, gamerpic and XUID.
 
-    GET /profile?gamertag=YOUR_GAMERTAG
+No UPCBadger database is required.
 
-The Worker calls OpenXBL and returns only:
+Secret:
+npx wrangler secret put OPENXBL_API_KEY
 
-- gamertag
-- gamerscore
-- gamerpic URL
-- XUID
+Never commit the key to GitHub. Cloudflare documents Worker secrets as encrypted bindings intended for API keys and tokens.
 
-The OpenXBL API key stays server-side as a Cloudflare Worker secret.
+Deployment:
+npx wrangler login
+npx wrangler deploy
+npx wrangler secret put OPENXBL_API_KEY
 
-## Deliberate scope
+The deployed Worker URL can later be inserted into the live ESP32 profile client.
 
-This first implementation does NOT add:
-
-- database
-- user accounts
-- MAC registration
-- telemetry
-- analytics
-- RTA/WebSockets
-- friends
-- achievements
-- location or other personal data
-
-Presence/current-game data will be added only after the basic profile request is proven.
-
-## Secret
-
-Set the OpenXBL key as a Worker secret:
-
-    wrangler secret put OPENXBL_API_KEY
-
-Never commit the key to GitHub.
-
-## Current provider endpoint
-
-OpenXBL currently documents:
-
-    GET /v2/player/gamertag/:gt
-
-This Worker uses that endpoint and maps the response into the UPCBadger-specific V1 payload.
-
-## Next test
-
-1. Deploy the Worker.
-2. Add the OpenXBL API key as a secret.
-3. Test /profile?gamertag=... from a browser/curl.
-4. Confirm the returned JSON.
-5. Only then connect the ESP32.
+V1 deliberately excludes accounts, MAC registration, telemetry, analytics, RTA/WebSockets and a database. Presence/current game and direct gamerpic rendering remain follow-on work.
