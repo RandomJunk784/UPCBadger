@@ -8,16 +8,30 @@ The Worker checks a 15-minute edge cache, calls OpenXBL on a cache miss, and ret
 
 No UPCBadger database is required.
 
-Secret:
+## Secret
+
+The OpenXBL API key is a Cloudflare Worker secret. Never put it in firmware or GitHub.
+
+Set it with:
+
 npx wrangler secret put OPENXBL_API_KEY
 
-Never commit the key to GitHub. Cloudflare documents Worker secrets as encrypted bindings intended for API keys and tokens.
+Because wrangler.toml declares OPENXBL_API_KEY as required, configure the secret before the first deployment.
 
-Deployment:
+## Deployment
+
+From this directory:
+
 npx wrangler login
-npx wrangler deploy
 npx wrangler secret put OPENXBL_API_KEY
+npx wrangler deploy
+
+Cloudflare documents Worker secrets as encrypted bindings intended for API keys and tokens.
 
 The deployed Worker URL can later be inserted into the live ESP32 profile client.
 
-V1 deliberately excludes accounts, MAC registration, telemetry, analytics, RTA/WebSockets and a database. Presence/current game and direct gamerpic rendering remain follow-on work.
+## V1 scope
+
+Do not add accounts, MAC registration, telemetry, analytics, RTA/WebSockets, or a database yet.
+
+Presence/current game and direct gamerpic rendering remain follow-on work after the basic profile request is proven.
