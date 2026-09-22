@@ -11,6 +11,8 @@
     - Wi-Fi SSID/password stored locally in NVS
     - Xbox Gamertag stored locally in NVS
     - rear CONFIG button reserved on GPIO32, internal pull-up
+    - 3s hold: setup mode
+    - 15s hold: factory reset, then setup mode
     - Xbox-themed profile UI matching the UPCBadger concept
     - 5-minute retention protection with fade/black/2px shift
 
@@ -41,6 +43,7 @@
 // -------------------- Config button --------------------
 #define CONFIG_BUTTON_PIN 32
 #define CONFIG_HOLD_MS 3000UL
+#define FACTORY_RESET_HOLD_MS 15000UL
 
 // -------------------- Retention --------------------
 #define RETENTION_INTERVAL_MS (5UL * 60UL * 1000UL)
@@ -362,9 +365,30 @@ static bool connectWiFi()
   return WiFi.status() == WL_CONNECTED;
 }
 
+static void factoryResetAndSetup()
+{
+  Serial.println("FACTORY RESET REQUESTED");
+  prefs.begin("upcbadger", false);
+  prefs.clear();
+  prefs.end();
+
+  wifiSSID = "";
+  wifiPassword = "";
+  gamertag = "";
+
+  tft.fillScreen(BLACK);
+  text("UPCBadger", 180, 145, green(), &fonts::Font4);
+  text("FACTORY RESET", 180, 195, green2(), &fonts::Font2);
+  text("STARTING SETUP", 180, 230, green3(), &fonts::Font0);
+  delay(1200);
+
+  startConfigMode();
+}
+
 static void checkConfigButton()
 {
   bool down = digitalRead(CONFIG_BUTTON_PIN) == LOW;
+
   if (down)
   {
     if (!buttonLatched)
@@ -372,15 +396,26 @@ static void checkConfigButton()
       buttonLatched = true;
       buttonDownMs = millis();
     }
-    else if (!configMode && millis() - buttonDownMs >= CONFIG_HOLD_MS)
-    {
-      startConfigMode();
-    }
+    return;
   }
-  else
+
+  if (!buttonLatched) return;
+
+  uint32_t held = millis() - buttonDownMs;
+  buttonLatched = false;
+  buttonDownMs = 0;
+
+  // Decide the action on release so a deliberate 15-second hold
+  // can complete without the 3-second setup action firing first.
+  if (held >= FACTORY_RESET_HOLD_MS)
   {
-    buttonLatched = false;
-    buttonDownMs = 0;
+    if (!configMode) factoryResetAndSetup();
+    return;
+  }
+
+  if (held >= CONFIG_HOLD_MS && !configMode)
+  {
+    startConfigMode();
   }
 }
 
