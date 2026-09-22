@@ -2,13 +2,12 @@
   UPCBadger CONTROLLER DETECT V1 — STANDALONE
   --------------------------------------------
   Purpose:
-    Experimental proof-of-concept for passive/low-interference gaming-controller
+    Experimental proof-of-concept for non-connecting gaming-controller
     detection on the original ESP32 DevKit 1.
 
   What this prototype does:
     - Uses the locked UPCBadger GC9B72 TFT pinout.
-    - Scans BLE advertisements and logs identifying fields.
-    - Scans Bluetooth Classic inquiry results and logs names/COD/RSSI.
+    - Scans BLE advertisements and logs identifying fields.\n    - Scans Bluetooth Classic inquiry results and logs names/COD/RSSI.
     - Classifies likely platform: XBOX / PLAYSTATION / NINTENDO / UNKNOWN.
     - Displays the currently recognised platform and intended boot theme.
     - Reads the existing local Xbox Gamertag key ("gt") from the profile demo
