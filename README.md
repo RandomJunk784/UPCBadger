@@ -3,30 +3,31 @@
 ConsoleBadger digital console badge project.
 
 ## Current working state
+330x350 quality-ramp boot.
+- 360x360 GC9B72 panel
+- 330x350 active boot window
+- 96 -> 192 -> 256 colour quality ramp
+- LZ4 HC9
+- direct-DMA playback path
+- verified playback around 13.4 FPS
+- best confirmed quality/performance baseline
 
-**320 / 12 FPS baseline**
+## Product branch
+- no dedicated phone app
+- rear CONFIG button on GPIO32
+- local ESP32 setup portal
+- Wi-Fi + Xbox Gamertag only for first configuration
+- settings stored locally in NVS
+- no user database
+- no persistent MAC customer records
+- Xbox profile data via a small Cloudflare Worker -> OpenXBL service
+- OpenXBL secret remains server-side
+- 360x360 Xbox-themed profile UI
+- 5-minute retention protection with fade, black interval and small positional shift
 
-- 360×360 GC9B72 panel
-- 320×320 centred active artwork
-- circular-safe artwork footprint
-- CBV1 + LZ4 HC9
-- direct-DMA RGB565 path
-- SD/TFT pipeline
-- verified average: **12.021 FPS**
+See docs/PRODUCT_ARCHITECTURE_V1.md, docs/PROFILE_UI_V1.md and services/profile-worker/.
 
-See:
-- `docs/WORKING_BASELINE.md`
-- `firmware/current/UPCBadger_320_BASE_12FPS.ino`
-- `docs/TEST_HISTORY.md`
+## Standalone demo
+firmware/current/UPCBadger_PROFILE_DEMO_V1_STANDALONE.ino
 
-## Repository structure
-
-```
-artwork/      Artwork and asset notes
-docs/         Project records and experiment history
-firmware/
-  current/    Active working firmware
-  reference/  Legacy known-good reference firmware
-```
-
-Experimental firmware that has been superseded is intentionally not kept as a pile of separate files. Its important results and failure reasons are recorded in the experiment archive.
+This deliberately does not use SD/CBP playback. It exists to prove provisioning and profile UI without risking the known-good animation path.
