@@ -17,7 +17,7 @@ ConsoleBadger digital console badge project.
 See:
 - `docs/WORKING_BASELINE.md`
 - `firmware/current/UPCBadger_320_BASE_12FPS.ino`
-- `docs/EXPERIMENT_ARCHIVE.md`
+- `docs/TEST_HISTORY.md`
 
 ## Repository structure
 
