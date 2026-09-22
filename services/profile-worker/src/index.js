@@ -1,4 +1,3 @@
-
 const OPENXBL_BASE = "https://api.xbl.io";
 
 export default {
@@ -17,6 +16,20 @@ export default {
 
     if (!env.OPENXBL_API_KEY) {
       return json({ error: "server_not_configured" }, 500);
+    }
+
+    const cacheKey = new Request(
+      new URL("/_cache/profile/" + encodeURIComponent(gamertag.toLowerCase()), request.url),
+      { method: "GET" }
+    );
+
+    const cache = caches.default;
+    const cached = await cache.match(cacheKey);
+
+    if (cached) {
+      const response = new Response(cached.body, cached);
+      response.headers.set("X-UPCBadger-Cache", "HIT");
+      return response;
     }
 
     const upstream = await fetch(
@@ -38,12 +51,17 @@ export default {
 
     const data = await upstream.json();
 
-    return json({
+    const response = json({
       gamertag: data.gamertag ?? null,
       gamerscore: data.gamerscore ?? null,
       gamerpic: data.profilePicture ?? null,
       xuid: data.xuid ?? null
     });
+
+    response.headers.set("Cache-Control", "public, max-age=900");
+    response.headers.set("X-UPCBadger-Cache", "MISS");
+    await cache.put(cacheKey, response.clone());
+    return response;
   }
 };
 
@@ -52,7 +70,8 @@ function json(body, status = 200) {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*"
     }
   });
 }
