@@ -214,3 +214,19 @@ A failure in an optional subsystem must fall back to the normal Badger boot.
 **Do not build the whole dream at once.**
 Every experiment must answer one useful question and preserve the known-good baseline.
 When something cannot be done with the available hardware/software, stop and identify the cheapest route around it rather than forcing a purchase.
+
+
+## Easter Egg delivery model — provisional
+The museum does not have to be exhausted in one session.
+
+- Easter eggs may be delivered at most approximately one per calendar month.
+- The exact month/egg selection can be pseudo-randomised locally so discovery remains unpredictable.
+- The device stores the delivered/seen state in NVS.
+- Once an egg has been delivered, it remains available to the user; the system does not need to repeat it unless deliberately designed to do so.
+- The core historical sequence remains ordered for the historical museum exhibits. The monthly delivery mechanism controls **when** an exhibit becomes available, not its historical position.
+- Special seasonal eggs are separate from the historical sequence.
+- **Halloween and Christmas eggs are not tied to a particular gaming era.** They may draw from any decade/platform represented in the museum and can deliberately jump across eras.
+- Seasonal eggs can therefore be short, unusual, humorous or cross-era without disrupting the chronological museum story.
+- The provisional total should be treated as more than the original 10-egg museum: a base historical collection plus seasonal/special eggs.
+- Delivery must be deterministic enough to prevent accidental duplicate delivery, but unpredictable enough that the user cannot simply know the next exhibit from the calendar alone.
+- No server is required for scheduling; the ESP32 can use its local stored state. If reliable real-world date/time is unavailable, seasonal handling can fall back to configured date or be disabled rather than making a false assumption.
