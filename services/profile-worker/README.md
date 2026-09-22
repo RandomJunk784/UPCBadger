@@ -35,3 +35,16 @@ The deployed Worker URL can later be inserted into the live ESP32 profile client
 Do not add accounts, MAC registration, telemetry, analytics, RTA/WebSockets, or a database yet.
 
 Presence/current game and direct gamerpic rendering remain follow-on work after the basic profile request is proven.
+
+## Cost guardrail — prototype
+
+UPCBadger is a hobby prototype with a hard requirement to avoid recurring service costs while the project is being evaluated.
+
+- Cloudflare Workers: use the Workers Free plan only.
+- OpenXBL: use the $0/forever free tier only.
+- Do not add paid Cloudflare products, Workers Paid, R2 paid storage, databases, or other metered services without explicit approval first.
+- Do not upgrade OpenXBL without explicit approval first.
+- Keep caching/rate limiting conservative so a bug cannot create unnecessary API traffic.
+- If a required service cannot operate within the free tiers, stop and flag the cost before implementing it.
+
+As of September 2026, Cloudflare documents Workers Free at 100,000 Worker requests/day and OpenXBL documents its free tier at 150 requests/hour. These limits may change, so verify pricing before any future production change.
