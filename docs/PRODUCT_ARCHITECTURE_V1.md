@@ -27,7 +27,7 @@ The physical button is preferred over permanently discoverable BLE because radio
 
 ## Configuration UI
 
-The first configurator is intentionally tiny:
+The first configurator is intentionally tiny. The temporary setup Wi-Fi is an open local network and is only enabled during deliberate setup mode:
 
 ### Wi-Fi
 - Wi-Fi network
@@ -39,9 +39,17 @@ The first configurator is intentionally tiny:
 ### Display
 Only essential display configuration should be exposed initially, if required by the firmware. Do not create an unnecessary settings/Extras screen.
 
+The temporary setup network is **ConsoleBadger** and the local setup address is **192.168.4.1**.
+
+The browser asks for:
+
+- Wi-Fi network
+- Wi-Fi password
+- Xbox Gamer ID
+
 The intended user flow is:
 
-Hold button -> connect phone -> open browser configurator -> enter Wi-Fi + Gamertag -> Save -> badge connects -> done
+Hold button -> connect to ConsoleBadger -> open 192.168.4.1 -> enter Wi-Fi + Gamer ID -> Save & Connect -> badge restarts -> joins home Wi-Fi -> done
 
 No dedicated mobile app is planned.
 
