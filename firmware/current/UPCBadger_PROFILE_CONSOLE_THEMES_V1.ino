@@ -368,11 +368,17 @@ static void drawSetupScreen()
   tft.setTextDatum(textdatum_t::middle_center);
   tft.setFont(&fonts::Font0);
   tft.setTextSize(2);
-  tft.setTextColor(softWhite(), BLACK);
 
+  tft.setTextColor(softWhite(), BLACK);
   tft.drawString("ConsoleBadger Setup", cx, 95);
-  tft.drawString("Open 192.168.4.1", cx, 150);
-  tft.drawString("using your phone browser", cx, 195);
+
+  tft.setTextColor(green(), BLACK);
+  tft.drawString("Find ConsoleBadger Wifi and", cx, 150);
+
+  tft.setTextColor(softWhite(), BLACK);
+  tft.drawString("connect using your phone", cx, 195);
+
+  tft.setTextColor(green2(), BLACK);
   tft.drawString("(Turn OFF mobile data)", cx, 255);
 
   tft.setTextSize(1);
