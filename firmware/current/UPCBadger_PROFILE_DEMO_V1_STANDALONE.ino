@@ -141,6 +141,8 @@ static uint8_t protectionShift = 0;
 
 // Demo data is deliberately labelled on-screen until live API is attached.
 static uint32_t demoGamerscore = 125640;
+static uint8_t lastApClientCount = 255;
+static uint32_t lastApDiagMs = 0;
 
 // -------------------- UI helpers --------------------
 static String initials(String name)
@@ -303,11 +305,14 @@ body{margin:0;background:#050806;color:#e9fff0;font-family:Arial,sans-serif}.wra
 
 static void handleRoot()
 {
+  Serial.println("[AP] HTTP GET /");
   server.send(200, "text/html", CONFIG_HTML);
 }
 
 static void handleSave()
 {
+  Serial.println("[AP] HTTP POST /save");
+
   String ssid = server.arg("ssid");
   String pass = server.arg("password");
   String gt = server.arg("gamertag");
@@ -320,11 +325,17 @@ static void handleSave()
     return;
   }
 
+  Serial.print("[SETUP] Saving Wi-Fi SSID: ");
+  Serial.println(ssid);
+  Serial.print("[SETUP] Saving Gamer ID: ");
+  Serial.println(gt);
+
   prefs.begin("upcbadger", false);
   prefs.putString("ssid", ssid);
   prefs.putString("pass", pass);
   prefs.putString("gt", gt);
   prefs.end();
+  Serial.println("[SETUP] NVS save complete.");
 
   server.send(200, "text/html", "<html><body style='font-family:Arial;background:#050806;color:white;text-align:center;padding:40px'><h1 style='color:#15ff4d'>Saved.</h1><p>Restarting UPCBadger...</p></body></html>");
   delay(900);
@@ -335,8 +346,15 @@ static void startConfigMode()
 {
   configMode = true;
 
-  // Open temporary setup Wi-Fi. No password is required.
+  Serial.println();
+  Serial.println("==========================================");
+  Serial.println(" UPCBadger CONFIGURATION MODE");
+  Serial.println("==========================================");
+  Serial.println("[AP] Starting Wi-Fi SoftAP...");
+
   WiFi.mode(WIFI_AP);
+  Serial.println("[AP] WiFi.mode(WIFI_AP) OK");
+
   WiFi.softAPdisconnect(true);
   delay(100);
 
@@ -344,28 +362,61 @@ static void startConfigMode()
 
   IPAddress ip(192,168,4,1);
   IPAddress mask(255,255,255,0);
-  WiFi.softAPConfig(ip, ip, mask);
 
-  if (!WiFi.softAP(setupApSSID.c_str(), nullptr, 6, false, 1))
+  bool apConfigOK = WiFi.softAPConfig(ip, ip, mask);
+  Serial.print("[AP] softAPConfig: ");
+  Serial.println(apConfigOK ? "OK" : "FAILED");
+
+  bool apOK = WiFi.softAP(setupApSSID.c_str(), nullptr, 6, false, 1);
+  Serial.print("[AP] softAP start: ");
+  Serial.println(apOK ? "OK" : "FAILED");
+
+  if (!apOK)
   {
-    Serial.println("ERROR: setup AP start failed");
+    Serial.println("[AP] ERROR: SoftAP could not start.");
     while (true) delay(1000);
   }
 
+  Serial.print("[AP] SSID: ");
+  Serial.println(WiFi.softAPSSID());
+  Serial.print("[AP] IP: ");
+  Serial.println(WiFi.softAPIP());
+  Serial.print("[AP] Gateway: ");
+  Serial.println(WiFi.gatewayIP());
+  Serial.print("[AP] Subnet: ");
+  Serial.println(WiFi.softAPSubnetMask());
+  Serial.println("[AP] Channel: 6");
+  Serial.print("[AP] Client count: ");
+  Serial.println(WiFi.softAPgetStationNum());
+
   dns.start(53, "*", ip);
+  Serial.println("[DNS] Captive DNS started.");
+
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/generate_204", HTTP_GET, handleRoot);
   server.on("/hotspot-detect.html", HTTP_GET, handleRoot);
   server.on("/connecttest.txt", HTTP_GET, handleRoot);
+
   server.onNotFound([](){
+    Serial.print("[AP] HTTP unknown path: ");
+    Serial.println(server.uri());
     server.sendHeader("Location", "/", true);
     server.send(302, "text/plain", "");
   });
+
   server.begin();
+  Serial.println("[HTTP] Web server started on port 80.");
+  Serial.println("[AP] READY — connect phone to ConsoleBadger");
+  Serial.println("[AP] Then open: http://192.168.4.1");
+  Serial.println("[AP] Mobile data should be OFF while testing.");
+  Serial.println("==========================================");
+
+  lastApClientCount = WiFi.softAPgetStationNum();
+  lastApDiagMs = millis();
+
   drawSetupScreen();
 }
-
 static bool loadSettings()
 {
   prefs.begin("upcbadger", true);
@@ -532,6 +583,25 @@ void loop()
   {
     dns.processNextRequest();
     server.handleClient();
+
+    uint8_t clients = WiFi.softAPgetStationNum();
+
+    if (clients != lastApClientCount)
+    {
+      Serial.print("[AP] Connected clients: ");
+      Serial.println(clients);
+      lastApClientCount = clients;
+    }
+
+    if (millis() - lastApDiagMs >= 10000UL)
+    {
+      Serial.print("[AP] HEARTBEAT | IP ");
+      Serial.print(WiFi.softAPIP());
+      Serial.print(" | clients ");
+      Serial.println(clients);
+      lastApDiagMs = millis();
+    }
+
     delay(5);
     return;
   }
