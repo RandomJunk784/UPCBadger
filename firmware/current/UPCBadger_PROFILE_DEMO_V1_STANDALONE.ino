@@ -296,12 +296,190 @@ static void drawSetupScreen()
 }
 
 static const char CONFIG_HTML[] PROGMEM = R"HTML(
-<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ConsoleBadger Setup</title>
 <style>
-body{margin:0;background:#050806;color:#e9fff0;font-family:Arial,sans-serif}.wrap{max-width:430px;margin:auto;padding:24px}.card{background:#07110a;border:1px solid #1b5a2a;border-radius:22px;padding:22px;box-shadow:0 0 30px #00ff4420}h1{margin:0;color:#15ff4d;font-size:30px}p{color:#79a985}label{display:block;margin-top:18px;color:#9de7ae;font-size:14px}input{box-sizing:border-box;width:100%;padding:14px;margin-top:7px;border-radius:12px;border:1px solid #234c2c;background:#020503;color:white;font-size:16px}button{width:100%;padding:15px;margin-top:24px;border:0;border-radius:12px;background:#15dc48;color:#001b07;font-weight:bold;font-size:16px}.small{font-size:12px;color:#577e60;margin-top:18px}
-</style></head><body><div class="wrap"><div class="card"><h1>Console<span style="color:#11dc49">Badger</span></h1><p>Configure your badge.</p><form method="POST" action="/save"><label>Wi-Fi network<input name="ssid" maxlength="64" autocomplete="off" required></label><label>Wi-Fi password<input name="password" type="password" maxlength="64" autocomplete="off"></label><label>Xbox Gamer ID<input name="gamertag" maxlength="32" autocomplete="off" required></label><button>SAVE &amp; CONNECT</button></form><div class="small">Wi-Fi and Gamertag are saved on the badge.</div></div></div></body></html>
+body{margin:0;background:#050806;color:#e9fff0;font-family:Arial,sans-serif}
+.wrap{max-width:430px;margin:auto;padding:20px}
+.card{background:#07110a;border:1px solid #1b5a2a;border-radius:22px;padding:22px;box-shadow:0 0 30px #00ff4420}
+h1{margin:0;color:#15ff4d;font-size:30px}
+p{color:#79a985}
+label{display:block;margin-top:16px;color:#9de7ae;font-size:14px}
+input{box-sizing:border-box;width:100%;padding:14px;margin-top:7px;border-radius:12px;border:1px solid #234c2c;background:#020503;color:white;font-size:16px}
+button{width:100%;padding:14px;margin-top:18px;border:0;border-radius:12px;background:#15dc48;color:#001b07;font-weight:bold;font-size:16px}
+button.secondary{background:#0c2412;color:#9de7ae;border:1px solid #1b5a2a}
+#networks{margin-top:12px}
+.net{padding:12px;border:1px solid #1b5a2a;border-radius:12px;margin-top:8px;background:#08120a;cursor:pointer}
+.net b{color:#e9fff0}
+.meta{color:#6ea37a;font-size:12px;margin-top:3px}
+.status{font-size:13px;color:#79a985;min-height:18px;margin-top:10px}
+.small{font-size:12px;color:#577e60;margin-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="card">
+<h1>Console<span style="color:#11dc49">Badger</span></h1>
+<p>Configure your badge.</p>
+
+<button class="secondary" type="button" onclick="scanWiFi()">SCAN FOR WI-FI NETWORKS</button>
+<div id="status" class="status">Tap scan to find nearby networks.</div>
+<div id="networks"></div>
+
+<form method="POST" action="/save">
+<label>Wi-Fi network
+<input id="ssid" name="ssid" maxlength="64" autocomplete="off" required>
+</label>
+
+<label>Wi-Fi password
+<input name="password" type="password" maxlength="64" autocomplete="off">
+</label>
+
+<label>Xbox Gamer ID
+<input name="gamertag" maxlength="32" autocomplete="off" required>
+</label>
+
+<button>SAVE &amp; CONNECT</button>
+</form>
+
+<div class="small">Tap your Wi-Fi network above to fill its name automatically.</div>
+</div>
+</div>
+
+<script>
+async function scanWiFi(){
+  const status=document.getElementById('status');
+  const list=document.getElementById('networks');
+  status.textContent='Scanning nearby Wi-Fi...';
+  list.innerHTML='';
+
+  try{
+    const r=await fetch('/scan');
+    if(!r.ok) throw new Error('scan failed');
+    const nets=await r.json();
+
+    if(!nets.length){
+      status.textContent='No networks found. Enter the name manually.';
+      return;
+    }
+
+    status.textContent=nets.length+' network'+(nets.length===1?'':'s')+' found. Tap yours.';
+
+    nets.forEach(n=>{
+      const row=document.createElement('div');
+      row.className='net';
+
+      const name=document.createElement('b');
+      name.textContent=n.ssid;
+
+      const meta=document.createElement('div');
+      meta.className='meta';
+      meta.textContent=n.rssi+' dBm · '+(n.secure?'Secured':'Open');
+
+      row.appendChild(name);
+      row.appendChild(meta);
+
+      row.onclick=()=>{
+        document.getElementById('ssid').value=n.ssid;
+        status.textContent='Selected '+n.ssid;
+        document.getElementById('ssid').scrollIntoView({behavior:'smooth',block:'center'});
+      };
+
+      list.appendChild(row);
+    });
+  }catch(e){
+    status.textContent='Scan failed. Enter the Wi-Fi name manually.';
+  }
+}
+</script>
+</body>
+</html>
 )HTML";
+
+
+static String jsonEscape(const String &value)
+{
+  String out;
+  out.reserve(value.length() + 8);
+
+  for (size_t i = 0; i < value.length(); ++i)
+  {
+    char c = value[i];
+
+    if (c == '\\' || c == '"')
+    {
+      out += '\\';
+      out += c;
+    }
+    else if (c == '\n' || c == '\r')
+    {
+      out += ' ';
+    }
+    else
+    {
+      out += c;
+    }
+  }
+
+  return out;
+}
+
+static void handleScan()
+{
+  Serial.println("[SCAN] Starting Wi-Fi scan...");
+
+  // Keep the setup AP alive while using the station radio to scan.
+  WiFi.mode(WIFI_AP_STA);
+
+  int16_t count = WiFi.scanNetworks(false, false);
+
+  Serial.print("[SCAN] Networks found: ");
+  Serial.println(count);
+
+  if (count < 0)
+  {
+    WiFi.scanDelete();
+    server.send(500, "application/json", "[]");
+    Serial.println("[SCAN] Scan failed.");
+    return;
+  }
+
+  String json = "[";
+  bool first = true;
+
+  for (int i = 0; i < count; ++i)
+  {
+    String ssid = WiFi.SSID(i);
+
+    if (ssid.length() == 0)
+      continue;
+
+    if (!first)
+      json += ",";
+
+    first = false;
+
+    bool secure = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+
+    json += "{\"ssid\":\"";
+    json += jsonEscape(ssid);
+    json += "\",\"rssi\":";
+    json += String(WiFi.RSSI(i));
+    json += ",\"secure\":";
+    json += secure ? "true" : "false";
+    json += "}";
+  }
+
+  json += "]";
+
+  server.send(200, "application/json", json);
+  WiFi.scanDelete();
+
+  Serial.println("[SCAN] Results sent to browser.");
+}
 
 static void handleRoot()
 {
@@ -392,6 +570,7 @@ static void startConfigMode()
   dns.start(53, "*", ip);
   Serial.println("[DNS] Captive DNS started.");
 
+  server.on("/scan", HTTP_GET, handleScan);
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/generate_204", HTTP_GET, handleRoot);
