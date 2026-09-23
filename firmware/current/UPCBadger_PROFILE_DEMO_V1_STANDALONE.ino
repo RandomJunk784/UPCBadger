@@ -260,14 +260,20 @@ static void bootSequence()
 static void drawSetupScreen()
 {
   tft.fillScreen(BLACK);
-  int cx = 180;
-  text("UPCBadger", cx, 86, green(), &fonts::Font4);
-  text("SETUP MODE", cx, 120, green2(), &fonts::Font2);
-  text("CONNECT TO", cx, 165, green3(), &fonts::Font0);
-  text(setupApSSID, cx, 190, green(), &fonts::Font2);
-  text(String("PASSWORD ") + setupApPassword, cx, 220, softWhite(), &fonts::Font0);
-  text("OPEN 192.168.4.1", cx, 260, green2(), &fonts::Font2);
-  text("NO APP REQUIRED", cx, 302, green3(), &fonts::Font0);
+
+  const int cx = 180;
+
+  // Clean, high-legibility setup screen.
+  text("ConsoleBadger Setup", cx, 62, softWhite(), &fonts::Font2);
+  text("OPEN 192.168.4.1", cx, 112, green(), &fonts::Font2);
+  text(setupApSSID, cx, 177, green(), &fonts::Font4);
+
+  text("PASSWORD", cx, 226, green2(), &fonts::Font2);
+  text(setupApPassword, cx, 262, softWhite(), &fonts::Font4);
+
+  // Keep the lower area intentionally quiet.
+  tft.drawCircle(cx, 328, 18, green3());
+  tft.drawCircle(cx, 328, 12, green3());
 }
 
 static const char CONFIG_HTML[] PROGMEM = R"HTML(
