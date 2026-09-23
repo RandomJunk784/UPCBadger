@@ -1,27 +1,23 @@
-/* 
-  UPCBadger PROFILE DEMO V1 — WIFI SETUP
-  --------------------------------------
-  Standalone product-layer proof.
+/*
+  UPCBadger PROFILE DEMO V1 — STANDALONE
+  -------------------------------------
+  Purpose:
+    Prove the new product layer without touching the proven CBP/SD playback.
 
-  - 360x360 GC9B72, locked TFT pins
-  - no SD/CBP dependency
-  - open ConsoleBadger setup AP
-  - browser at 192.168.4.1
-  - browser saves Wi-Fi SSID/password + Xbox Gamer ID into NVS
-  - reboot then connects to stored Wi-Fi
-  - displays connected IP briefly
-  - 3s rear button hold = setup mode
-  - 15s rear button hold = factory reset + setup mode
-  - five-minute retention protection with fade/black/2px shift
-
-  Setup AP:
-    SSID: ConsoleBadger
-    Security: OPEN
-    URL: 192.168.4.1
+  Features:
+    - 360x360 GC9B72 on the locked TFT pins
+    - browser-based first-time setup over ESP32 SoftAP
+    - captive-DNS portal + direct 192.168.4.1 fallback
+    - Wi-Fi SSID/password stored locally in NVS
+    - Xbox Gamer ID stored locally in NVS
+    - rear CONFIG button reserved on GPIO32, internal pull-up
+    - Xbox-themed profile UI matching the UPCBadger concept
+    - 5-minute retention protection with fade/black/2px shift
 
   IMPORTANT:
-    This build intentionally does not use the SD card or CBP boot asset.
-    It isolates provisioning and Wi-Fi from the known-good animation engine.
+    This is intentionally STANDALONE. It does not use the SD card or CBP boot
+    animation yet. The live OpenXBL request is deliberately deferred until the
+    cloud Worker is deployed; the UI uses clearly labelled demo data meanwhile.
 
   SAFETY:
     UNPLUG THE ESP32 BEFORE CHANGING WIRING OR SOLDERING.
@@ -34,6 +30,7 @@
 #include <DNSServer.h>
 #include <Preferences.h>
 
+// -------------------- Locked TFT pins --------------------
 #define TFT_MOSI 23
 #define TFT_SCLK 18
 #define TFT_CS   21
@@ -41,16 +38,20 @@
 #define TFT_RST   4
 #define TFT_SPI_HZ 80000000UL
 
+// -------------------- Config button --------------------
 #define CONFIG_BUTTON_PIN 32
 #define CONFIG_HOLD_MS 3000UL
 #define FACTORY_RESET_HOLD_MS 15000UL
 
+// -------------------- Retention --------------------
 #define RETENTION_INTERVAL_MS (5UL * 60UL * 1000UL)
 #define BLACK_HOLD_MS 1000UL
 #define FADE_STEPS 8
 #define FADE_STEP_MS 70UL
 
+// -------------------- Theme --------------------
 static const uint16_t BLACK = 0x0000;
+static const uint16_t WHITE = 0xFFFF;
 
 static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
 {
@@ -63,7 +64,7 @@ static uint16_t scale565(uint16_t c, uint8_t amount)
 {
   if (amount == 255) return c;
   uint32_t r = (c >> 11) & 0x1F;
-  uint32_t g = (c >> 5) & 0x3F;
+  uint32_t g = (c >> 5)  & 0x3F;
   uint32_t b = c & 0x1F;
   r = (r * amount + 127) / 255;
   g = (g * amount + 127) / 255;
@@ -71,31 +72,16 @@ static uint16_t scale565(uint16_t c, uint8_t amount)
   return (uint16_t)((r << 11) | (g << 5) | b);
 }
 
-static uint16_t green(uint8_t a = 255)
-{
-  return scale565(rgb565(0,255,45), a);
-}
+static uint16_t green(uint8_t a = 255) { return scale565(rgb565(0,255,45), a); }
+static uint16_t green2(uint8_t a = 255) { return scale565(rgb565(0,175,35), a); }
+static uint16_t green3(uint8_t a = 255) { return scale565(rgb565(0,85,18), a); }
+static uint16_t softWhite(uint8_t a = 255) { return scale565(rgb565(215,225,220), a); }
 
-static uint16_t green2(uint8_t a = 255)
-{
-  return scale565(rgb565(0,175,35), a);
-}
-
-static uint16_t green3(uint8_t a = 255)
-{
-  return scale565(rgb565(0,85,18), a);
-}
-
-static uint16_t softWhite(uint8_t a = 255)
-{
-  return scale565(rgb565(215,225,220), a);
-}
-
+// -------------------- LovyanGFX --------------------
 class LGFX : public lgfx::LGFX_Device
 {
   lgfx::Panel_GC9B72 panel;
   lgfx::Bus_SPI bus;
-
 public:
   LGFX()
   {
@@ -138,22 +124,36 @@ static WebServer server(80);
 static DNSServer dns;
 static Preferences prefs;
 
+// -------------------- Persistent settings --------------------
 static String wifiSSID;
 static String wifiPassword;
 static String gamertag;
+
+// Temporary setup-network identity shown on the TFT and used by the AP.
 static String setupApSSID;
 
+// -------------------- Runtime state --------------------
 static bool configMode = false;
 static bool buttonLatched = false;
 static uint32_t buttonDownMs = 0;
 static uint32_t screenStartedMs = 0;
 static uint8_t protectionShift = 0;
 
+// Demo data is deliberately labelled on-screen until live API is attached.
 static uint32_t demoGamerscore = 125640;
 
+// -------------------- UI helpers --------------------
+static String initials(String name)
+{
+  name.trim();
+  name.toUpperCase();
+  if (name.length() == 0) return "X";
+  if (name.length() > 2) name = name.substring(0, 2);
+  return name;
+}
+
 static void text(const String &s, int x, int y, uint16_t color,
-                 const lgfx::IFont *font,
-                 textdatum_t datum = textdatum_t::middle_center)
+                 const lgfx::IFont *font, textdatum_t datum = textdatum_t::middle_center)
 {
   tft.setTextDatum(datum);
   tft.setFont(font);
@@ -171,15 +171,6 @@ static void cleanPixelText(const String &s, int x, int y, uint16_t color,
   tft.setTextColor(color, BLACK);
   tft.drawString(s, x, y);
   tft.setTextSize(1);
-}
-
-static String initials(String name)
-{
-  name.trim();
-  name.toUpperCase();
-  if (name.length() == 0) return "X";
-  if (name.length() > 2) name = name.substring(0, 2);
-  return name;
 }
 
 static void drawWifiIcon(int x, int y, uint8_t a)
@@ -200,6 +191,7 @@ static void drawProfile(uint8_t brightness, int shift)
   int cy = 176;
 
   tft.fillScreen(BLACK);
+
   tft.drawCircle(cx, cy, 174, g3);
   tft.drawCircle(cx, cy, 170, g3);
 
@@ -218,12 +210,13 @@ static void drawProfile(uint8_t brightness, int shift)
   text(String(demoGamerscore), cx, cy + 123, w, &fonts::Font4);
 
   tft.fillCircle(74 + shift, 333, 5, g);
-  text("PROFILE DEMO", 89 + shift, 333, g2, &fonts::Font0,
-       textdatum_t::middle_left);
+  text("PROFILE DEMO", 89 + shift, 333, g2, &fonts::Font0, textdatum_t::middle_left);
 
   drawWifiIcon(287 + shift, 320, brightness);
   text(WiFi.status() == WL_CONNECTED ? "WI-FI" : "OFFLINE",
        311 + shift, 337, g3, &fonts::Font0, textdatum_t::middle_left);
+
+  tft.setTextDatum(textdatum_t::middle_center);
 }
 
 static void drawBoot(float phase)
@@ -237,6 +230,7 @@ static void drawBoot(float phase)
   tft.drawCircle(180, 150, 80, g);
   tft.drawCircle(180, 150, 76, green3(a));
 
+  // Stylised X.
   tft.drawLine(145, 115, 170, 150, g);
   tft.drawLine(215, 115, 190, 150, g);
   tft.drawLine(145, 185, 180, 150, g);
@@ -257,19 +251,17 @@ static void bootSequence()
   while (millis() - start < total)
   {
     uint32_t e = millis() - start;
-
     if (e < 1900)
     {
-      drawBoot(e / 1900.0f);
+      float p = e / 1900.0f;
+      drawBoot(p);
     }
     else
     {
       uint32_t f = e - 1900;
-      uint8_t a = f >= fade ? 0 :
-                   (uint8_t)(255UL - (f * 255UL / fade));
+      uint8_t a = f >= fade ? 0 : (uint8_t)(255UL - (f * 255UL / fade));
       drawBoot(a / 255.0f);
     }
-
     delay(45);
   }
 
@@ -302,31 +294,12 @@ static void drawSetupScreen()
 
   tft.setTextSize(1);
 }
-
 static const char CONFIG_HTML[] PROGMEM = R"HTML(
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ConsoleBadger Setup</title>
 <style>
-body{margin:0;background:#050806;color:#e9fff0;font-family:Arial,sans-serif}
-.wrap{max-width:430px;margin:auto;padding:24px}
-.card{background:#07110a;border:1px solid #1b5a2a;border-radius:22px;padding:22px;box-shadow:0 0 30px #00ff4420}
-h1{margin:0;color:#15ff4d;font-size:30px}
-p{color:#79a985}
-label{display:block;margin-top:18px;color:#9de7ae;font-size:14px}
-input{box-sizing:border-box;width:100%;padding:14px;margin-top:7px;border-radius:12px;border:1px solid #234c2c;background:#020503;color:white;font-size:16px}
-button{width:100%;padding:15px;margin-top:24px;border:0;border-radius:12px;background:#15dc48;color:#001b07;font-weight:bold;font-size:16px}
-.small{font-size:12px;color:#577e60;margin-top:18px}
-</style></head><body><div class="wrap"><div class="card">
-<h1>Console<span style="color:#11dc49">Badger</span></h1>
-<p>Configure your badge.</p>
-<form method="POST" action="/save">
-<label>Wi-Fi network<input name="ssid" maxlength="64" autocomplete="off" required></label>
-<label>Wi-Fi password<input name="password" type="password" maxlength="64" autocomplete="off"></label>
-<label>Xbox Gamer ID<input name="gamertag" maxlength="32" autocomplete="off" required></label>
-<button>SAVE &amp; CONNECT</button>
-</form>
-<div class="small">Wi-Fi and Gamer ID are saved on the badge.</div>
-</div></div></body></html>
+body{margin:0;background:#050806;color:#e9fff0;font-family:Arial,sans-serif}.wrap{max-width:430px;margin:auto;padding:24px}.card{background:#07110a;border:1px solid #1b5a2a;border-radius:22px;padding:22px;box-shadow:0 0 30px #00ff4420}h1{margin:0;color:#15ff4d;font-size:30px}p{color:#79a985}label{display:block;margin-top:18px;color:#9de7ae;font-size:14px}input{box-sizing:border-box;width:100%;padding:14px;margin-top:7px;border-radius:12px;border:1px solid #234c2c;background:#020503;color:white;font-size:16px}button{width:100%;padding:15px;margin-top:24px;border:0;border-radius:12px;background:#15dc48;color:#001b07;font-weight:bold;font-size:16px}.small{font-size:12px;color:#577e60;margin-top:18px}
+</style></head><body><div class="wrap"><div class="card"><h1>Console<span style="color:#11dc49">Badger</span></h1><p>Configure your badge.</p><form method="POST" action="/save"><label>Wi-Fi network<input name="ssid" maxlength="64" autocomplete="off" required></label><label>Wi-Fi password<input name="password" type="password" maxlength="64" autocomplete="off"></label><label>Xbox Gamer ID<input name="gamertag" maxlength="32" autocomplete="off" required></label><button>SAVE &amp; CONNECT</button></form><div class="small">Wi-Fi and Gamertag are saved on the badge.</div></div></div></body></html>
 )HTML";
 
 static void handleRoot()
@@ -339,17 +312,12 @@ static void handleSave()
   String ssid = server.arg("ssid");
   String pass = server.arg("password");
   String gt = server.arg("gamertag");
-
   ssid.trim();
   gt.trim();
 
   if (ssid.isEmpty() || gt.isEmpty())
   {
-    server.send(
-      400,
-      "text/plain",
-      "Wi-Fi network and Gamer ID are required."
-    );
+    server.send(400, "text/plain", "Wi-Fi network and Gamertag are required.");
     return;
   }
 
@@ -359,12 +327,7 @@ static void handleSave()
   prefs.putString("gt", gt);
   prefs.end();
 
-  server.send(
-    200,
-    "text/html",
-    "<html><body style='font-family:Arial;background:#050806;color:white;text-align:center;padding:40px'><h1 style='color:#15ff4d'>Saved.</h1><p>Restarting ConsoleBadger...</p></body></html>"
-  );
-
+  server.send(200, "text/html", "<html><body style='font-family:Arial;background:#050806;color:white;text-align:center;padding:40px'><h1 style='color:#15ff4d'>Saved.</h1><p>Restarting UPCBadger...</p></body></html>");
   delay(900);
   ESP.restart();
 }
@@ -373,6 +336,7 @@ static void startConfigMode()
 {
   configMode = true;
 
+  // Open temporary setup Wi-Fi. No password is required.
   WiFi.mode(WIFI_AP);
   WiFi.softAPdisconnect(true);
   delay(100);
@@ -390,18 +354,15 @@ static void startConfigMode()
   }
 
   dns.start(53, "*", ip);
-
   server.on("/", HTTP_GET, handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/generate_204", HTTP_GET, handleRoot);
   server.on("/hotspot-detect.html", HTTP_GET, handleRoot);
   server.on("/connecttest.txt", HTTP_GET, handleRoot);
-
   server.onNotFound([](){
     server.sendHeader("Location", "/", true);
     server.send(302, "text/plain", "");
   });
-
   server.begin();
   drawSetupScreen();
 }
@@ -413,7 +374,6 @@ static bool loadSettings()
   wifiPassword = prefs.getString("pass", "");
   gamertag = prefs.getString("gt", "");
   prefs.end();
-
   return wifiSSID.length() > 0 && gamertag.length() > 0;
 }
 
@@ -428,29 +388,22 @@ static bool connectWiFi()
   text("CONNECTING WI-FI", 180, 200, green2(), &fonts::Font0);
 
   uint32_t start = millis();
-
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - start < 20000UL)
-  {
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000UL)
     delay(100);
-  }
 
   if (WiFi.status() == WL_CONNECTED)
   {
     tft.fillScreen(BLACK);
     text("WI-FI CONNECTED", 180, 150, green(), &fonts::Font2);
-    text(WiFi.localIP().toString(), 180, 195,
-         softWhite(), &fonts::Font2);
+    text(WiFi.localIP().toString(), 180, 195, softWhite(), &fonts::Font2);
     delay(1800);
     return true;
   }
 
   tft.fillScreen(BLACK);
   text("WI-FI FAILED", 180, 150, green2(), &fonts::Font2);
-  text("RETURNING TO SETUP", 180, 195,
-       softWhite(), &fonts::Font0);
+  text("RETURNING TO SETUP", 180, 195, softWhite(), &fonts::Font0);
   delay(1200);
-
   return false;
 }
 
@@ -486,7 +439,6 @@ static void checkConfigButton()
       buttonLatched = true;
       buttonDownMs = millis();
     }
-
     return;
   }
 
@@ -498,6 +450,8 @@ static void checkConfigButton()
   buttonLatched = false;
   buttonDownMs = 0;
 
+  // Decide on release so a 15-second hold does not trigger
+  // the 3-second setup action first.
   if (held >= FACTORY_RESET_HOLD_MS)
   {
     if (!configMode)
@@ -523,7 +477,6 @@ static void retentionCycle()
   delay(BLACK_HOLD_MS);
 
   protectionShift ^= 1;
-
   for (uint8_t step = 0; step <= FADE_STEPS; ++step)
   {
     uint8_t a = (uint8_t)(255L * step / FADE_STEPS);
@@ -538,7 +491,6 @@ void setup()
 {
   Serial.begin(115200);
   delay(200);
-
   pinMode(CONFIG_BUTTON_PIN, INPUT_PULLUP);
 
   if (!tft.init())
@@ -550,8 +502,7 @@ void setup()
   tft.initDMA();
   tft.fillScreen(BLACK);
 
-  if (!loadSettings() ||
-      digitalRead(CONFIG_BUTTON_PIN) == LOW)
+  if (!loadSettings() || digitalRead(CONFIG_BUTTON_PIN) == LOW)
   {
     startConfigMode();
     return;
@@ -567,15 +518,12 @@ void setup()
   Serial.println(WiFi.localIP());
 
   bootSequence();
-
   drawProfile(0, 0);
-
   for (uint8_t a = 0; a <= 255; a += 51)
   {
     drawProfile(a, 0);
     delay(75);
   }
-
   screenStartedMs = millis();
 }
 
