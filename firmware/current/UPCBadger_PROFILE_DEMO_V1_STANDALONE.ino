@@ -274,26 +274,25 @@ static void drawSetupScreen()
 
   const int cx = 180;
 
-  // Clean, centred setup instructions.
-  // Four lines intentionally match the requested wording.
   tft.setTextDatum(textdatum_t::middle_center);
   tft.setFont(&fonts::Font0);
   tft.setTextSize(2);
 
   tft.setTextColor(softWhite(), BLACK);
-  tft.drawString("ConsoleBadger Setup", cx, 105);
-
-  tft.setTextColor(green2(), BLACK);
-  tft.drawString("Connect to:", cx, 155);
+  tft.drawString("ConsoleBadger Setup", cx, 95);
 
   tft.setTextColor(green(), BLACK);
-  tft.drawString("192.168.4.1", cx, 205);
+  tft.drawString("Open 192.168.4.1", cx, 150);
 
   tft.setTextColor(softWhite(), BLACK);
-  tft.drawString("using your phone browser", cx, 255);
+  tft.drawString("using your phone browser", cx, 195);
+
+  tft.setTextColor(green2(), BLACK);
+  tft.drawString("(Turn OFF mobile data)", cx, 255);
 
   tft.setTextSize(1);
 }
+
 static const char CONFIG_HTML[] PROGMEM = R"HTML(
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ConsoleBadger Setup</title>
