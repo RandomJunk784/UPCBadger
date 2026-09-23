@@ -162,6 +162,18 @@ static void text(const String &s, int x, int y, uint16_t color,
   tft.drawString(s, x, y);
 }
 
+static void cleanPixelText(const String &s, int x, int y, uint16_t color,
+                           uint8_t scale = 2,
+                           textdatum_t datum = textdatum_t::middle_center)
+{
+  tft.setTextDatum(datum);
+  tft.setFont(&fonts::Font0);
+  tft.setTextSize(scale);
+  tft.setTextColor(color, BLACK);
+  tft.drawString(s, x, y);
+  tft.setTextSize(1);
+}
+
 static void drawWifiIcon(int x, int y, uint8_t a)
 {
   uint16_t c = green(a);
@@ -263,19 +275,15 @@ static void drawSetupScreen()
 
   const int cx = 180;
 
-  // Clean, high-legibility setup screen.
-  text("ConsoleBadger Setup", cx, 62, softWhite(), &fonts::Font2);
-  text("OPEN 192.168.4.1", cx, 112, green(), &fonts::Font2);
-  text(setupApSSID, cx, 177, green(), &fonts::Font4);
+  // Use a scaled bitmap font for deterministic, clean pixels on the panel.
+  cleanPixelText("ConsoleBadger Setup", cx, 56, softWhite(), 2);
+  cleanPixelText("OPEN 192.168.4.1", cx, 105, green(), 2);
+  cleanPixelText(setupApSSID, cx, 166, green(), 2);
+  cleanPixelText("PASSWORD", cx, 220, green2(), 2);
+  cleanPixelText(setupApPassword, cx, 257, softWhite(), 2);
 
-  text("PASSWORD", cx, 226, green2(), &fonts::Font2);
-  text(setupApPassword, cx, 262, softWhite(), &fonts::Font4);
-
-  // Keep the lower area intentionally quiet.
-  tft.drawCircle(cx, 328, 18, green3());
-  tft.drawCircle(cx, 328, 12, green3());
+  // No decorative touch/button graphic.
 }
-
 static const char CONFIG_HTML[] PROGMEM = R"HTML(
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>UPCBadger Setup</title>
