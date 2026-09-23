@@ -32,3 +32,15 @@ The ESP32 must never contain the OpenXBL secret.
 
 ## Next milestone
 Deploy and test the Worker independently, then replace the demo profile source with the actual Worker JSON response.
+
+## Console theme selection
+
+Console mode is selected in the browser configurator rather than by a physical switch:
+
+- Xbox
+- PlayStation
+- Nintendo
+
+The selection is stored in ESP32 NVS. On normal startup the badge uses the stored mode to choose the themed boot animation and profile colours/UI.
+
+The setup TFT screen and setup browser remain deliberately black and white and do not inherit the selected theme. The selected theme begins only after setup and Wi-Fi connection.
