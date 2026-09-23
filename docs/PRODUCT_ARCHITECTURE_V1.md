@@ -159,3 +159,23 @@ Button wiring target:
 - long press enters configuration mode
 
 **Power off/unplug the ESP32 before soldering or changing wiring.**
+
+## One-time setup lifecycle
+
+The badge behaves as a small appliance after provisioning. On an unconfigured unit, setup mode creates the temporary **ConsoleBadger** SoftAP, captive portal and Wi-Fi scanner. The user selects the console mode, Wi-Fi network, password and Gamer ID, then saves.
+
+The save operation writes a local `configured` flag plus the selected console mode and required credentials to ESP32 NVS, then the unit restarts automatically.
+
+Normal product mode does **not** create the setup WebServer or DNSServer. Those services are allocated only when setup mode is entered, so the normal playback environment remains close to the known-good animation player's memory footprint.
+
+Normal startup is:
+
+`load configured flag -> allocate playback staging -> TFT -> SD -> home Wi-Fi -> selected boot animation -> gamer/profile page`
+
+For the current prototype, Xbox is the only enabled console mode and uses the proven Xbox CBP animation. PlayStation and Nintendo assets will be added later.
+
+The gamer/profile page uses the selected console theme. The browser setup page remains deliberately black and white; themed CSS variables are reserved for the later gamer/profile web UI.
+
+A small `CONNECTED` state is shown on the gamer/profile page when the badge has a live home-Wi-Fi connection.
+
+The rear button remains available for re-entry to configuration and the 15-second factory reset path. Factory reset clears the local provisioning data and returns the unit to first-use setup.
