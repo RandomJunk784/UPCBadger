@@ -39,7 +39,7 @@ The first configurator is intentionally tiny. The temporary setup Wi-Fi is an op
 ### Display
 Only essential display configuration should be exposed initially, if required by the firmware. Do not create an unnecessary settings/Extras screen.
 
-The temporary setup network is **ConsoleBadger** and the local setup address is **192.168.4.1**.
+The temporary setup network is **ConsoleBadger** and the local setup address is **192.168.4.1**. During setup, the phone should keep Wi-Fi enabled, turn **mobile data OFF**, connect to **ConsoleBadger**, and then open the local address.
 
 The browser asks for:
 
