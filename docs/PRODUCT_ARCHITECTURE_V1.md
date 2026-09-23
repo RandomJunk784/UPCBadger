@@ -36,20 +36,34 @@ The first configurator is intentionally tiny. The temporary setup Wi-Fi is an op
 ### Xbox
 - Xbox Gamertag
 
+### Console mode
+The user selects the console family in the browser configurator:
+
+- Xbox
+- PlayStation
+- Nintendo
+
+The selected mode is stored locally in ESP32 NVS and determines the themed boot animation and product UI after setup.
+
 ### Display
 Only essential display configuration should be exposed initially, if required by the firmware. Do not create an unnecessary settings/Extras screen.
 
-The temporary setup network is **ConsoleBadger** and the local setup address is **192.168.4.1**. During setup, the phone should keep Wi-Fi enabled, turn **mobile data OFF**, connect to **ConsoleBadger**, and then open the local address.
+The temporary setup network is **ConsoleBadger** and the local setup address is **192.168.4.1**.
+
+The setup experience is deliberately **theme-neutral**: the TFT setup screen is black and white only, and the browser configurator is black and white only. Do not use Xbox green during setup. During setup, the phone should keep Wi-Fi enabled, turn **mobile data OFF**, connect to **ConsoleBadger**, and then open the local address.
 
 The browser asks for:
 
 - Wi-Fi network
 - Wi-Fi password
 - Xbox Gamer ID
+- Console mode
 
 The intended user flow is:
 
-Hold button -> connect to ConsoleBadger -> open 192.168.4.1 -> enter Wi-Fi + Gamer ID -> Save & Connect -> badge restarts -> joins home Wi-Fi -> done
+Hold button -> connect to ConsoleBadger -> open 192.168.4.1 -> select console mode -> enter Wi-Fi + Gamer ID -> Save & Connect -> badge restarts -> joins home Wi-Fi -> themed boot -> themed gamer page
+
+The setup browser page must remain black and white regardless of the selected console mode.
 
 No dedicated mobile app is planned.
 
@@ -83,7 +97,9 @@ Do not store:
 - analytics
 - persistent MAC-address customer records
 
-The badge only stores the configuration it needs locally.
+The badge only stores the configuration it needs locally, including the selected console mode.
+
+Once the badge has joined the user's home Wi-Fi, the eventual gamer/profile page should show a small **CONNECTED** status indicator. This is a device-state indicator only; it is not telemetry.
 
 ## Xbox profile service — V1
 
@@ -130,6 +146,8 @@ The 360x360 display can eventually present:
 - custom user artwork
 
 The visual design should be developed after the basic data pipeline is proven.
+
+Theme architecture should use one shared UI/CSS definition with theme variables rather than three separate configurator pages. The selected mode changes the colour palette, UI styling and which themed boot animation is launched.
 
 ## Hardware note
 
