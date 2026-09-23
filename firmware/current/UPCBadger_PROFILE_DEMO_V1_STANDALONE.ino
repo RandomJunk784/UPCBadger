@@ -13,6 +13,7 @@
     - rear CONFIG button reserved on GPIO32, internal pull-up
     - 3s hold: setup mode
     - 15s hold: factory reset, then setup mode
+    - setup PIN: 1234
     - Xbox-themed profile UI matching the UPCBadger concept
     - 5-minute retention protection with fade/black/2px shift
 
@@ -275,21 +276,33 @@ static void drawSetupScreen()
 
   const int cx = 180;
 
-  // Use a scaled bitmap font for deterministic, clean pixels on the panel.
-  cleanPixelText("ConsoleBadger Setup", cx, 56, softWhite(), 2);
-  cleanPixelText("OPEN 192.168.4.1", cx, 105, green(), 2);
-  cleanPixelText(setupApSSID, cx, 166, green(), 2);
-  cleanPixelText("PASSWORD", cx, 220, green2(), 2);
-  cleanPixelText(setupApPassword, cx, 257, softWhite(), 2);
+  // Clean bitmap font for the small GC9B72 panel.
+  tft.setTextDatum(textdatum_t::middle_center);
+  tft.setFont(&fonts::Font0);
+  tft.setTextSize(2);
 
-  // No decorative touch/button graphic.
+  tft.setTextColor(softWhite(), BLACK);
+  tft.drawString("ConsoleBadger Setup", cx, 56);
+
+  tft.setTextColor(green(), BLACK);
+  tft.drawString("OPEN 192.168.4.1", cx, 105);
+
+  tft.drawString("Badge ID 0000", cx, 166);
+
+  tft.setTextColor(green2(), BLACK);
+  tft.drawString("PASSWORD", cx, 220);
+
+  tft.setTextColor(softWhite(), BLACK);
+  tft.drawString("1234", cx, 257);
+
+  tft.setTextSize(1);
 }
 static const char CONFIG_HTML[] PROGMEM = R"HTML(
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>UPCBadger Setup</title>
 <style>
 body{margin:0;background:#050806;color:#e9fff0;font-family:Arial,sans-serif}.wrap{max-width:430px;margin:auto;padding:24px}.card{background:#07110a;border:1px solid #1b5a2a;border-radius:22px;padding:22px;box-shadow:0 0 30px #00ff4420}h1{margin:0;color:#15ff4d;font-size:30px}p{color:#79a985}label{display:block;margin-top:18px;color:#9de7ae;font-size:14px}input{box-sizing:border-box;width:100%;padding:14px;margin-top:7px;border-radius:12px;border:1px solid #234c2c;background:#020503;color:white;font-size:16px}button{width:100%;padding:15px;margin-top:24px;border:0;border-radius:12px;background:#15dc48;color:#001b07;font-weight:bold;font-size:16px}.small{font-size:12px;color:#577e60;margin-top:18px}
-</style></head><body><div class="wrap"><div class="card"><h1>UPC<span style="color:#11dc49">Badger</span></h1><p>Set up your badge. No app required.</p><form method="POST" action="/save"><label>Wi-Fi network<input name="ssid" maxlength="64" required></label><label>Wi-Fi password<input name="password" type="password" maxlength="64"></label><label>Xbox Gamertag<input name="gamertag" maxlength="32" required></label><button>SAVE &amp; CONNECT</button></form><div class="small">Settings are stored on the badge.</div></div></div></body></html>
+</style></head><body><div class="wrap"><div class="card"><h1>UPC<span style="color:#11dc49">Badger</span></h1><p>Set up your badge. No app required.</p><form method="POST" action="/save"><label>Setup password<input name="pin" type="password" inputmode="numeric" value="1234" maxlength="4" required></label><label>Wi-Fi network<input name="ssid" maxlength="64" required></label><label>Wi-Fi password<input name="password" type="password" maxlength="64"></label><label>Xbox Gamertag<input name="gamertag" maxlength="32" required></label><button>SAVE &amp; CONNECT</button></form><div class="small">Settings are stored on the badge.</div></div></div></body></html>
 )HTML";
 
 static void handleRoot()
@@ -302,12 +315,13 @@ static void handleSave()
   String ssid = server.arg("ssid");
   String pass = server.arg("password");
   String gt = server.arg("gamertag");
+  String pin = server.arg("pin");
   ssid.trim();
   gt.trim();
 
-  if (ssid.isEmpty() || gt.isEmpty())
+  if (ssid.isEmpty() || gt.isEmpty() || pin != "1234")
   {
-    server.send(400, "text/plain", "Wi-Fi network and Gamertag are required.");
+    server.send(400, "text/plain", "Setup password, Wi-Fi network and Gamertag are required.");
     return;
   }
 
@@ -329,17 +343,12 @@ static void startConfigMode()
   WiFi.softAPdisconnect(true);
   delay(100);
 
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-  char suffix[7];
-  snprintf(suffix, sizeof(suffix), "%02X%02X%02X", mac[3], mac[4], mac[5]);
-  setupApSSID = String("UPCBadger-") + suffix;
-  setupApPassword = String("BDGR") + suffix;
+  setupApSSID = "ConsoleBadger-0000";
 
   IPAddress ip(192,168,4,1);
   IPAddress mask(255,255,255,0);
   WiFi.softAPConfig(ip, ip, mask);
-  WiFi.softAP(setupApSSID.c_str(), setupApPassword.c_str(), 6, false, 1);
+  WiFi.softAP(setupApSSID.c_str(), nullptr, 6, false, 1);
 
   dns.start(53, "*", ip);
   server.on("/", HTTP_GET, handleRoot);
