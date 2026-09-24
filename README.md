@@ -2,32 +2,51 @@
 
 ConsoleBadger digital console badge project.
 
-## Current working state
-330x350 quality-ramp boot.
+## Current engineering state
+
+The integrated player/product path is being brought together.
+
+### Proven
 - 360x360 GC9B72 panel
 - 330x350 active boot window
-- 96 -> 192 -> 256 colour quality ramp
-- LZ4 HC9
+- 96 → 192 → 256 colour quality ramp
+- LZ4 HC9 / CBP player
 - direct-DMA playback path
-- verified playback around 13.4 FPS
-- best confirmed quality/performance baseline
+- verified playback around 13.4 FPS on the protected performance baseline
+- SD + NVS + Wi-Fi compatibility path
+- v1.14: SD initialisation and CBP index loading succeed with the full player globals present
 
-## Product branch
-- no dedicated phone app
+### Current blocker
+v1.14 reaches:
+
+`SD.begin() OK`
+`Xbox CBP index loaded.`
+
+but cannot allocate the 96 KiB playback staging buffer afterwards.
+
+The next revision will target the staging allocation while preserving the proven player and product flow.
+
+## Product direction
 - rear CONFIG button on GPIO32
 - local ESP32 setup portal
-- Wi-Fi + Xbox Gamertag only for first configuration
+- Wi-Fi + Xbox Gamertag for first configuration
 - settings stored locally in NVS
 - no user database
 - no persistent MAC customer records
-- Xbox profile data via a small Cloudflare Worker -> OpenXBL service
-- OpenXBL secret remains server-side
+- Xbox profile data via Cloudflare Worker → OpenXBL
 - 360x360 Xbox-themed profile UI
-- 5-minute retention protection with fade, black interval and small positional shift
+- retention protection for the long-lived profile screen
 
-See docs/PRODUCT_ARCHITECTURE_V1.md, docs/PROFILE_UI_V1.md and services/profile-worker/.
+## Repository structure
+
+See:
+- `docs/PRODUCT_ARCHITECTURE_V1.md`
+- `docs/PROFILE_UI_V1.md`
+- `docs/UPCBadger_HANDOFF_2026-09-24.md`
+- `services/profile-worker/`
 
 ## Standalone demo
-firmware/current/UPCBadger_PROFILE_DEMO_V1_STANDALONE.ino
 
-This deliberately does not use SD/CBP playback. It exists to prove provisioning and profile UI without risking the known-good animation path.
+`firmware/current/UPCBadger_PROFILE_DEMO_V1_STANDALONE.ino`
+
+This deliberately avoids SD/CBP playback so provisioning/profile UI can be tested independently.
