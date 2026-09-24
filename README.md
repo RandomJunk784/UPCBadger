@@ -2,51 +2,48 @@
 
 ConsoleBadger digital console badge project.
 
-## Current engineering state
+## Current working state — v1.17
 
-The integrated player/product path is being brought together.
+PROTECTED WORKING BASE.
 
-### Proven
-- 360x360 GC9B72 panel
-- 330x350 active boot window
-- 96 → 192 → 256 colour quality ramp
-- LZ4 HC9 / CBP player
-- direct-DMA playback path
-- verified playback around 13.4 FPS on the protected performance baseline
-- SD + NVS + Wi-Fi compatibility path
-- v1.14: SD initialisation and CBP index loading succeed with the full player globals present
+The integrated product path is now working on the project hardware:
+- SD initialisation and CBP index load
+- Xbox boot animation
+- Gamer ID/profile screen
+- background home Wi-Fi
+- configuration portal
+- Wi-Fi scan
+- NVS save
+- reboot and persisted settings restoration
 
-### Current blocker
-v1.14 reaches:
-
-`SD.begin() OK`
-`Xbox CBP index loaded.`
-
-but cannot allocate the 96 KiB playback staging buffer afterwards.
-
-The next revision will target the staging allocation while preserving the proven player and product flow.
+The working video path is the 360x360 GC9B72 / 330x350 active window using the quality-ramp player architecture.
 
 ## Product direction
+- no dedicated phone app
 - rear CONFIG button on GPIO32
 - local ESP32 setup portal
 - Wi-Fi + Xbox Gamertag for first configuration
 - settings stored locally in NVS
 - no user database
 - no persistent MAC customer records
-- Xbox profile data via Cloudflare Worker → OpenXBL
+- Xbox profile data via Cloudflare Worker -> OpenXBL service
+- OpenXBL secret remains server-side
 - 360x360 Xbox-themed profile UI
-- retention protection for the long-lived profile screen
+- 5-minute retention protection
 
-## Repository structure
+## Current development target
+
+Improve the static Gamer ID/profile screen visually while preserving the working playback and product flow. Live Xbox profile data retrieval comes after the static UI is satisfactory.
 
 See:
-- `docs/PRODUCT_ARCHITECTURE_V1.md`
-- `docs/PROFILE_UI_V1.md`
-- `docs/UPCBadger_HANDOFF_2026-09-24.md`
-- `services/profile-worker/`
+- docs/PRODUCT_ARCHITECTURE_V1.md
+- docs/PROFILE_UI_V1.md
+- docs/UPCBadger_HANDOFF_2026-09-24.md
+- docs/MILESTONE_V1.17_2026-09-24.md
+- services/profile-worker/
 
 ## Standalone demo
 
-`firmware/current/UPCBadger_PROFILE_DEMO_V1_STANDALONE.ino`
+firmware/current/UPCBadger_PROFILE_DEMO_V1_STANDALONE.ino
 
 This deliberately avoids SD/CBP playback so provisioning/profile UI can be tested independently.
