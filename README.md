@@ -2,93 +2,86 @@
 
 Updated: 2026-09-26
 
-## Active development — v1.42
+## Active development — v1.43
 
 Latest physically tested firmware: v1.38.
-Prepared development builds: v1.39, v1.40, v1.41 and v1.42.
+Prepared development builds: v1.39, v1.40, v1.41, v1.42 and v1.43.
 
-**v1.42 is the current master-animation architecture experiment.**
+**v1.43 is the current circular-energy transition experiment.**
 
 ### Master animation
 
 One CBP asset:
 `ConsoleBadger_MASTER.CBP`
 
+V1.43:
 - 360x360
-- 181 frames
-- 12 FPS metadata
-- boot/transition frames 0..103
-- Gamer ID loop frames 104..180
+- 177 frames
+- 12 FPS
+- boot/transition frames 0..99
+- Gamer ID loop frames 100..176
 - Gamer ID loop = 6.4167 seconds at 12 FPS
-- all 181 frames decode successfully on PC
-- stable shared 256-colour RGB565 palette
-- no dithering
+- all 177 frames decode successfully on PC
 
-The master is derived from the user-supplied 12-second Seedance 2.5 master.
+The master was derived from the user-supplied 12-second Seedance 2.5 master.
 
-Source selection:
-- boot/transition: source frames 0,2,4,...,206
-- Gamer ID loop: source frames 208..284
+### v1.43 transition surgery
 
-The loop endpoints were selected for visual compatibility, avoiding the original
-full-video 96 -> 0 jump.
+PC inspection of the 1–3 second circular-energy build found a visible positional
+wobble/reversal before the energy settles at the top of the circular element.
 
-### v1.42 playback architecture
+Deleted master frames:
+- 31
+- 32
+- 33
+- 34
 
-The same master CBP is used for startup and Gamer ID.
+The later stable continuation at frame 35 is kept.
 
-- boot frames 0..103 play once
-- frame 104 is the Gamer ID loop marker
-- configured units continue from frame 104
-- Gamer ID loops only through frames 104..180
-- first-time/unconfigured units pause on frame 104 while the existing setup AP/captive portal operates
-- manual config-button entry retains the normal setup screen
+These correspond to source frames 62, 64, 66 and 68 of the 24 FPS Seedance master.
+
+The edit is payload-preserving:
+- 177/177 retained frame payloads are byte-for-byte identical to v1.42
+- palette entries are unchanged
+- retained frame pixels are unchanged
+- only the CBP frame index/header has been rebuilt
+
+### v1.43 firmware
+
+The one-master architecture remains:
+- boot section plays once
+- configured units continue through the loop marker
+- Gamer ID loop repeats continuously
+- NVS/setup/Wi-Fi/product layer is retained
 - old five-minute black-screen/shift retention remains removed
 
-The existing product layer remains:
-- NVS/settings
-- saved Gamer ID
-- setup SoftAP/captive portal
-- home Wi-Fi
-- profile sync hook
-- config/factory-reset button
-- live overlay
-
-### Runtime SD asset
-
-Required:
+Runtime SD asset:
 `ConsoleBadger_MASTER.CBP`
 
-The previous separate runtime assets are superseded for v1.42:
-- `profile_energy.CBP`
-- `profile_energy_patch.CBP`
-- `profile_bg.pbg`
-- `ConsoleBadger_330x350_HYBRID96_192_256_HC9_TEST27B.CBP`
+Previous separate animation assets remain historical/backup material.
 
-Historical copies remain preserved in the Library.
+### Current UI
 
-### UI carried forward
-
-- TE initials removed
-- temporary cyan avatar placeholder removed
-- Gamer ID lowered and reduced in size
+- TE removed
+- temporary cyan avatar removed
+- Gamer ID lower and smaller
 - ONLINE moved outward
 - Wi-Fi text removed; beacon retained
-- dark central gamerpic well reserved for future live Xbox API gamerpic
+- central gamerpic well reserved for live Xbox API gamerpic
 
 ### Test status
 
-v1.42 is PC-validated but **not yet physically verified**.
+v1.43 is PC-validated but **not yet physically verified**.
 
 Next physical test:
-1. Compile/upload v1.42.
-2. Verify boot and transition.
-3. Verify first-time setup pauses at the loop marker.
-4. Verify configured units continue into the Gamer ID loop.
-5. Verify the 6.42-second Gamer ID loop is visually continuous.
-6. Verify live overlay stability.
+1. Compile/upload v1.43.
+2. Check the 1–3 second transition.
+3. Confirm the positional wobble is gone.
+4. Confirm the energy continues naturally into the next frame.
+5. Confirm the Gamer ID loop still behaves correctly.
+6. Confirm Lumina colour appearance remains unchanged.
 
-Do not alter the master CBP during the first physical test.
+V1.42 is the immediate rollback baseline.
 
 ## Evidence
 
@@ -96,17 +89,15 @@ The Library is the project source of truth for source videos, CBP binaries,
 physical LCD evidence, engineering handoffs and checksums.
 
 See:
-- docs/evidence/2026-09-26-v28-lumina-single-cbp.md
-- docs/evidence/2026-09-26-v139-ui-loop.md
 - docs/evidence/2026-09-26-v141-master-animation.md
-- docs/evidence/2026-09-26-v141-checksums.txt
 - docs/evidence/2026-09-26-v142-master-loop-marker.md
+- docs/evidence/2026-09-26-v143-transition-surgery.md
+- docs/evidence/2026-09-26-v143-checksums.txt
 
 ## Encoder recovery
 
 The original historical CBP1 encoder source has not been recovered.
-`make_cbp1_reconstructed.py` is a forensic reconstruction and must not be
-described as the original encoder.
+`make_cbp1_reconstructed.py` remains a forensic reconstruction.
 
 ## Safety
 
