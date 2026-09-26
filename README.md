@@ -2,63 +2,64 @@
 
 Updated: 2026-09-26
 
-## Active development — v1.41
+## Active development — v1.42
 
 Latest physically tested firmware: v1.38.
-Prepared test firmware: v1.39, v1.40 and v1.41.
+Prepared development builds: v1.39, v1.40, v1.41 and v1.42.
 
-**v1.41 is the current master-animation architecture experiment.**
+**v1.42 is the current master-animation architecture experiment.**
 
-### V1.41 master animation
+### Master animation
 
-One CBP asset now contains the entire boot-to-Gamer-ID visual path:
-
+One CBP asset:
 `ConsoleBadger_MASTER.CBP`
 
-Properties:
 - 360x360
 - 181 frames
 - 12 FPS metadata
 - boot/transition frames 0..103
 - Gamer ID loop frames 104..180
-- Gamer ID loop = 77 frames / ~6.42 seconds at 12 FPS
+- Gamer ID loop = 6.4167 seconds at 12 FPS
 - all 181 frames decode successfully on PC
-- stable 256-colour RGB565 palette
+- stable shared 256-colour RGB565 palette
 - no dithering
 
-The master was built from the user-supplied 12-second Seedance 2.5 master video.
+The master is derived from the user-supplied 12-second Seedance 2.5 master.
 
 Source selection:
 - boot/transition: source frames 0,2,4,...,206
-- Gamer ID loop: source frames 208..284 inclusive
+- Gamer ID loop: source frames 208..284
 
-The selected Gamer ID endpoints are visually compatible and produce a substantially
-smaller loop boundary discontinuity than the original 96 -> 0 wrap.
+The loop endpoints were selected for visual compatibility, avoiding the original
+full-video 96 -> 0 jump.
 
-### V1.41 firmware architecture
+### v1.42 playback architecture
 
-v1.41 uses the same master CBP for both startup and Gamer ID.
+The same master CBP is used for startup and Gamer ID.
 
-The product layer remains intact:
-- NVS settings
-- configured/unconfigured check
-- setup SoftAP + captive portal
+- boot frames 0..103 play once
+- frame 104 is the Gamer ID loop marker
+- configured units continue from frame 104
+- Gamer ID loops only through frames 104..180
+- first-time/unconfigured units pause on frame 104 while the existing setup AP/captive portal operates
+- manual config-button entry retains the normal setup screen
+- old five-minute black-screen/shift retention remains removed
+
+The existing product layer remains:
+- NVS/settings
 - saved Gamer ID
-- background home Wi-Fi
+- setup SoftAP/captive portal
+- home Wi-Fi
 - profile sync hook
 - config/factory-reset button
 - live overlay
 
-Playback:
-- boot player renders master frames 0..103 once
-- configured units enter loop frames 104..180
-- Gamer ID background continues moving indefinitely
-- old five-minute black/shift retention cycle remains removed
+### Runtime SD asset
 
-Runtime SD asset for v1.41:
+Required:
 `ConsoleBadger_MASTER.CBP`
 
-The old separate runtime assets are superseded for this experiment:
+The previous separate runtime assets are superseded for v1.42:
 - `profile_energy.CBP`
 - `profile_energy_patch.CBP`
 - `profile_bg.pbg`
@@ -66,28 +67,28 @@ The old separate runtime assets are superseded for this experiment:
 
 Historical copies remain preserved in the Library.
 
-### UI carried into v1.41
+### UI carried forward
 
 - TE initials removed
-- temporary cyan avatar circle removed
-- Gamer ID moved lower and smaller
+- temporary cyan avatar placeholder removed
+- Gamer ID lowered and reduced in size
 - ONLINE moved outward
-- Wi-Fi text removed; white beacon retained
-- dark central gamerpic well remains clear for future live Xbox API gamerpic
+- Wi-Fi text removed; beacon retained
+- dark central gamerpic well reserved for future live Xbox API gamerpic
 
 ### Test status
 
-v1.41 is PC-validated but **not yet physically verified**.
+v1.42 is PC-validated but **not yet physically verified**.
 
 Next physical test:
-1. compile/upload v1.41
-2. verify master boot appearance
-3. verify boot -> Gamer ID continuation
-4. verify continuous 104..180 loop
-5. watch the loop boundary
-6. verify live overlay stability
+1. Compile/upload v1.42.
+2. Verify boot and transition.
+3. Verify first-time setup pauses at the loop marker.
+4. Verify configured units continue into the Gamer ID loop.
+5. Verify the 6.42-second Gamer ID loop is visually continuous.
+6. Verify live overlay stability.
 
-Do not alter the master CBP during the first firmware test.
+Do not alter the master CBP during the first physical test.
 
 ## Evidence
 
@@ -97,9 +98,9 @@ physical LCD evidence, engineering handoffs and checksums.
 See:
 - docs/evidence/2026-09-26-v28-lumina-single-cbp.md
 - docs/evidence/2026-09-26-v139-ui-loop.md
-- docs/evidence/2026-09-26-v139-checksums.txt
 - docs/evidence/2026-09-26-v141-master-animation.md
 - docs/evidence/2026-09-26-v141-checksums.txt
+- docs/evidence/2026-09-26-v142-master-loop-marker.md
 
 ## Encoder recovery
 
