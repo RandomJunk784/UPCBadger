@@ -1,0 +1,17 @@
+# UPCBadger V28 / v1.38 checksums
+
+V28 CBP:
+1f12cd6cad81253bd32cf9ac76065b7895af842c86d249c69680787de93cd025  profile_energy.CBP
+
+v1.38 package:
+9cd7491e77029e080ce4aca4ed9e5a352f10e8ae247b864d16cb84339b053d06  UPCBadger_v1.38.zip
+
+Package internal hashes:
+4e2b80a673f65d3940f1926a5edb81ab03395bc7c984c826db851d5d35e7b01d  README.txt
+555b092e7ed16e247aeb327edfe8a19c9240a0174b0baf79d58b8f97e5fc5df9  UPCBadger_v1.38.ino
+1f12cd6cad81253bd32cf9ac76065b7895af842c86d249c69680787de93cd025  profile_energy.CBP
+
+Status:
+- PC validation passed
+- 97 frame CRC/decompression validation passed
+- physical LCD verification pending
