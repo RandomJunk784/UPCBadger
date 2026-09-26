@@ -2,92 +2,88 @@
 
 ConsoleBadger digital console badge project.
 
-## Current development state — v1.38 / V28
+## Current development state — v1.39 / V28
 
-**Prepared PC-verified test build. v1.36 remains the protected latest physically tested firmware.**
+**Prepared test build. v1.38 is the latest physically tested firmware.**
 
-The current product path includes:
+Current product path:
 - Xbox/ConsoleBadger boot flow
 - Gamer ID/profile screen
 - background home Wi-Fi
 - configuration portal and NVS save/persistence
-- white ONLINE + Wi-Fi profile status row
+- white ONLINE + Wi-Fi status row
 - V28 single-layer Lumina Gamer ID background
-- live profile overlay architecture ready for future Xbox API gamerpic/data
+- live profile overlay architecture for future Xbox API data
 
 ### V28 Lumina background
 
-The Gamer ID background has been redesigned as one full-screen animated asset:
+The Gamer ID background is now one full-screen animated asset:
 - source: 2026-09-26_11-08-26_Lumina.mp4
-- 97 source frames retained
-- 360x360 output
+- 97 frames retained
+- 360x360
 - 12 FPS
 - ~8.08 second continuous loop
-- one runtime CBP: `/profile_energy.CBP`
-- no animated `profile_energy_patch.CBP` required
-- fresh stable 256-colour RGB565 palette generated from the new Lumina animation
-- no dithering in the current production candidate
-- PC round-trip RMSE ~1.71 RGB levels/channel in expanded RGB565 display space
+- runtime: `/profile_energy.CBP`
+- fresh stable 256-colour RGB565 palette generated from the Lumina animation
+- no dithering
+- no runtime animated patch asset
+- PC round-trip aggregate RGB565/display-RGB RMSE ~1.71
 
-The V28 architecture removes the previous base+patch colour/compositor mismatch path.
+The V28 architecture removed the previous base+patch colour/compositor mismatch path.
 
-### v1.38 profile renderer
+### v1.39 follow-up
 
-Based directly on corrected v1.37:
-- full-screen Lumina background is streamed continuously
-- live Gamer ID overlay is restored after each frame
-- profile animation runs at the established 12 FPS operating point
-- frame scheduling is deadline-oriented to reduce timing drift
-- no second animated patch asset is opened or required
+Based directly on physically tested v1.38.
 
-Real Xbox API integration can later provide gamerpic, gamertag and status without changing the Lumina background.
+Changes:
+- remove temporary TE initials
+- remove temporary circular avatar placeholder
+- move ONLINE and Wi-Fi indicators left/right of the former avatar position
+- keep both indicators white
+- move Gamer ID text to Y=80 in the black/gloss region
+- improve 12 FPS deadline handling so an overrun does not add an unnecessary full frame interval at 97 -> 0
+- use 83,333 microsecond frame cadence
+- poll animation service every 5 ms instead of 30 ms
 
-### Important test status
+The V28 `profile_energy.CBP` bytes and colours are unchanged.
 
-v1.38 is **not yet physically verified**. Arduino IDE compile/upload and LCD testing are the next steps.
+### v1.39 runtime SD assets
 
-The first physical V28 test should answer:
-1. Is the full-screen Lumina animation smooth at 12 FPS?
-2. Does the live overlay remain visually stable?
-3. Does the single-CBP architecture eliminate the previous horizontal patch seams?
+Required:
+- `ConsoleBadger_330x350_HYBRID96_192_256_HC9_TEST27B.CBP` — known-good Xbox boot
+- `profile_energy.CBP` — V28 Lumina Gamer ID background
 
-If the live overlay flickers, the next change should be a protected overlay/no-write region rather than another colour transformation.
+Not required by v1.39:
+- `profile_bg.pbg`
+- `profile_energy_patch.CBP`
 
-## Product direction
+Keep the legacy files in backups/archive for provenance.
 
-- local ESP32 setup portal
-- Wi-Fi + Xbox Gamertag for first configuration
-- settings stored locally in NVS
-- no user database
-- no persistent MAC customer records
-- Xbox profile data via Cloudflare Worker -> OpenXBL service
-- 360x360 Xbox-themed profile UI
-- 5-minute retention protection as secondary burn/retention protection
+### Test status
+
+v1.39 has passed PC static/package validation but **has not yet been physically verified**.
+
+The next physical test should verify only:
+1. TE/circle are gone.
+2. Gamer ID sits in the intended black/gloss region.
+3. ONLINE/Wi-Fi sit cleanly left/right of centre.
+4. 97 -> 0 no longer visibly pauses.
+5. Lumina colours remain unchanged.
 
 ## Evidence and provenance
 
-The Library is the project source of truth for:
-- historical versions
-- large binary SD assets
-- original/user-supplied media
-- physical LCD video/photo evidence
-- encoder investigation and reconstruction records
-- checksums and PC validation evidence
+The Library is the project source of truth for historical versions, large binary assets, original/user-supplied media, physical LCD evidence, encoder investigation, and checksums.
 
-The original CBP encoder source has not been recovered. `make_cbp1_reconstructed.py` is a forensic reconstruction and must not be treated as the historical original.
+The original CBP encoder source has not been recovered. `make_cbp1_reconstructed.py` is a forensic reconstruction.
 
 See:
-- docs/PRODUCT_ARCHITECTURE_V1.md
-- docs/PROFILE_UI_V1.md
-- docs/evidence/2026-09-26-v27-colour-lcd-freeze.md
 - docs/evidence/2026-09-26-v28-lumina-single-cbp.md
 - docs/evidence/2026-09-26-v28-checksums.txt
+- docs/evidence/2026-09-26-v139-ui-loop.md
+- docs/evidence/2026-09-26-v139-checksums.txt
 - firmware/UPCBadger_v1.37_UI_CHANGE.md
-- docs/MILESTONE_V1.17_2026-09-24.md
 - services/profile-worker/
 
 ## Standalone demo
 
 firmware/current/UPCBadger_PROFILE_DEMO_V1_STANDALONE.ino
-
-This deliberately avoids SD/CBP playback so provisioning/profile UI can be tested independently.
