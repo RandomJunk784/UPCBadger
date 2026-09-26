@@ -1,0 +1,9 @@
+UPCBadger V1.61 engineering checkpoint
+Exactly one .ino is present in the Arduino sketch root.
+
+CHANGELOG_V1.61.md
+DataWrapper_REFERENCE_FROM_USER.hpp
+EVIDENCE_V1.59.md
+HANDOFF_V1.61.md
+MANIFEST.txt
+UPCBadger_v1.61.ino
