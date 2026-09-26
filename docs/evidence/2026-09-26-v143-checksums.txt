@@ -1,0 +1,10 @@
+# UPCBadger v1.43 checksums
+
+UPCBadger_v1.43.zip
+eadf8225c9ce0e60c16d4ea9da9803a324114301fec10e0035d2ba7743d3b428
+
+ConsoleBadger_MASTER.CBP
+4af58055d33ad4a4d4f310a1e6f150ec530cd4172ea9ff1e188da533663f17ad
+
+UPCBadger_v1.43.ino
+(not separately hashed here; included in package SHA256SUMS.txt)
