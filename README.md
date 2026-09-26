@@ -69,3 +69,7 @@ Required: ConsoleBadger_MASTER.CBP
 Before wiring, soldering, or physical modification:
 
 UNPLUG THE ESP32 FIRST.
+
+## V1.47 — network diagnostic
+
+V1.47 is the current transport test. It proves DNS, TLS/TCP, and the exact documented `/v2/account` request before player lookup. The PC has already returned HTTP 200 with the user's OpenXBL key. The ESP32 previously returned HTTP -1 / connection refused.
