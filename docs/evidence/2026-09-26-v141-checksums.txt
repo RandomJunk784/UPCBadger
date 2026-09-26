@@ -1,0 +1,16 @@
+# UPCBadger v1.41 checksums
+
+ConsoleBadger_MASTER.CBP
+eefce014f5a9537c64f5d8166ec57fc98f53d94ea2a9ce381a756d32e0d55c07
+
+UPCBadger_v1.41.zip
+87b6cd13ad312d4041532d583262969559da650679bc051b8a36c9e0e857282b
+
+Package internal:
+8394ae6bf524bc32ac8865aabca0ce3e8e0a56e92b07df5868e561cc0823d600  README.txt
+2b541e851b6b4e1664b6c89b3cd2d1e5332ba8dd72df877c4ed0098cf6554a89  UPCBadger_v1.41.ino
+eefce014f5a9537c64f5d8166ec57fc98f53d94ea2a9ce381a756d32e0d55c07  ConsoleBadger_MASTER.CBP
+
+Status:
+PC validation PASS.
+Physical verification pending.
