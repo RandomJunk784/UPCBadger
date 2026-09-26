@@ -2,27 +2,27 @@
 
 Source of truth: Library /UPCBadger.
 
-v1.37 package:
-eda7f215cd8ecf066d3bc6ae1f4b6a9b1e940c01f3d458e186677c783b81ad2c  UPCBadger_v1.37.zip
+Corrected v1.37 package:
+a698760971c0b6a81f04a31209e3c1c90e9e6f2e1b49fcef715c9f3cdf13c266  UPCBadger_v1.37.zip
 
 Package-internal SHA256SUMS:
 3c3262617a3957323c4edeca234c2bff7a3cf0e6b08055ac48ebbb530a171fe4  README.txt
-dc035fa7fbc083778e59aa3da4a40e17f1682eaf0f2a7259207126511656f1c1  UPCBadger_v1.37.ino
+1b86462d78e7b994d58a7c1df5eb439af4333a218f44632309211c2e0da148dc  UPCBadger_v1.37.ino
 b2d9da5dd5d08c22c984e634f2ef46ba06197668d4e31beb1cd5b616d4d02bde  profile_bg.pbg
 4d64ad017b9c1fc5a5433f12abdc09c8723e94b1663d526cda262c2cbfa1cb7a  profile_energy.CBP
 fefab4010f089ba4a5044cfe123929668d1100ad482010530a8b8e35cc4630db  profile_energy_patch.CBP
 0ac983a209b98e0e9939fe8846132fc540eb62ef9787623e79ea486ed00fc1be  UPCBadger_HANDOFF_2026-09-26_V27_COLOUR_LCD_FREEZE.md
 
-Canonical V27 Library assets:
-- profile_energy_V27_BOOTGREEN_EXACT.CBP
-- profile_energy_patch_V27_BOOTGREEN_EXACT.CBP
+Verification:
+- ZIP integrity passed
+- package is flat
+- all internal SHA-256 values match
+- corrected source contains no live v1.37 changelog block
+- brace balance is zero
+- V27 CBP hashes unchanged
 
-Physical evidence:
-- complete LCD sequence supplied 2026-09-26
-- physical LCD still supplied 2026-09-26
-- PC comparison/inspection images
-
-Status:
-- V27 colour state physically accepted as working reference
-- remaining two horizontal patch seams recorded as unresolved
-- v1.37 is prepared test firmware; Arduino compile/upload and physical LCD verification remain pending
+Packaging correction:
+The first v1.37 package accidentally placed the v1.37 changelog outside the C/C++ comment block, causing:
+  v1.37: -> compiler interpreted as code
+This was packaging/source assembly contamination only. The intended v1.37 UI code was otherwise unchanged.
+The defective package is retained in Library under 08_EVIDENCE/PACKAGING/UPCBadger_v1.37_PACKAGE_ERROR.zip.
