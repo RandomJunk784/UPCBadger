@@ -73,3 +73,8 @@ UNPLUG THE ESP32 FIRST.
 ## V1.47 — network diagnostic
 
 V1.47 is the current transport test. It proves DNS, TLS/TCP, and the exact documented `/v2/account` request before player lookup. The PC has already returned HTTP 200 with the user's OpenXBL key. The ESP32 previously returned HTTP -1 / connection refused.
+
+
+## V1.49 — TLS memory recovery test
+
+V1.48 proved Wi-Fi, DNS, and TCP 443 but TLS failed with mbedTLS `-32512 / SSL - Memory allocation failed`. V1.49 temporarily releases the 32 KiB animation staging buffer and closes the profile CBP file before the TLS handshake, then restores and revalidates animation resources afterward. No CBP pixels, palette, UI, NVS, or display geometry are changed.
