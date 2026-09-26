@@ -1,0 +1,27 @@
+# UPCBadger v1.41 manifest
+
+Library source of truth:
+- /UPCBadger/03_VERSIONS/UPCBadger_v1.41.zip
+- /UPCBadger/06_ASSETS_MEDIA/BOOT/ConsoleBadger_MASTER.CBP
+- /UPCBadger/05_HANDOFFS/UPCBadger_HANDOFF_2026-09-26_V41_MASTER_ANIMATION.md
+- /UPCBadger/08_EVIDENCE/IMAGE_INSPECTION/V141_MASTER_CONTACT.png
+- /UPCBadger/08_EVIDENCE/IMAGE_INSPECTION/V141_LOOP_ENDPOINTS.png
+- /UPCBadger/08_EVIDENCE/IMAGE_INSPECTION/V141_MASTER_BOOT_PLUS_LOOPED_PREVIEW.mp4
+
+Hashes:
+ConsoleBadger_MASTER.CBP
+eefce014f5a9537c64f5d8166ec57fc98f53d94ea2a9ce381a756d32e0d55c07
+
+UPCBadger_v1.41.zip
+87b6cd13ad312d4041532d583262969559da650679bc051b8a36c9e0e857282b
+
+Architecture:
+- ONE master 360x360 CBP
+- frames 0..103 boot/transition
+- frames 104..180 Gamer ID loop
+- Gamer ID loop 6.4167 s @ 12 FPS
+- product NVS/setup/Wi-Fi retained
+- old separate boot/profile assets are historical only
+
+Physical status:
+v1.41 not yet physically verified. v1.38 remains latest physical baseline.
