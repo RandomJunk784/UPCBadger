@@ -1,6 +1,6 @@
 # UPCBadger / ConsoleBadger
 
-Updated: 2026-09-26
+Updated: 2026-09-27
 
 ## Active development — v1.61
 
@@ -27,7 +27,7 @@ The latest physical test confirmed:
 - 32 KiB staging buffer restored
 - 181-frame master animation restored at 12 FPS
 
-The remaining known issue is **gamerpic rendering**: the image downloads and caches correctly, but the profile renderer currently reports `Gamerpic draw failed`.
+The latest physical UI observation shows the gamerpic rendering in the centre. Remaining work is visual refinement: reducing text boxes, finalising alignment/spacing, checking gamerpic clearance, and verifying refresh behaviour over time.
 
 ### V1.61 identity flow
 
@@ -129,6 +129,10 @@ Research areas include:
 - non-blocking XBL requests
 
 The production V1.61 baseline remains protected while this work is researched separately.
+
+## Latest UI observation — 2026-09-27
+
+The physical V1.61 profile screen now presents the four directional fields and central gamerpic together. This is the current product-presentation baseline; subsequent revisions should change one visual element at a time and be physically tested before replacing V1.61 as the rollback point.
 
 ## Secret handling
 
