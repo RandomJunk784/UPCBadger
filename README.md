@@ -1,42 +1,25 @@
 # UPCBadger / ConsoleBadger
 
-Updated: 2026-09-28
+Updated: 2026-09-29
 
-## Active development — v2.28
+## Active development — v2.33
 
-Latest firmware revision prepared from the compiled and physically working v2.27 baseline.
+Latest controlled gamerpic test, based directly on the protected v2.31 physical recovery point.
 
-### v2.28 changes
+### v2.33 changes
 
-- GamerID increased to approximately 18 px Orbitron.
-- GamerScore remains 24 px Orbitron.
-- Status bars retain the requested logical colour #9AF52A with corrected RGB565 packing for the direct DMA compositor.
+- Keeps the proven Xbox 208x208 gamerpic source.
+- Removes the 72x72 intermediate decode stage.
+- Tests direct 208x208 -> 115x115 RGB565 decode.
+- Keeps the proven 115px circular presentation.
+- Retains the exact v2.07 R/B correction.
 - Gamerpic outer green ring remains removed.
-- Gamerpic source/quality path remains unchanged.
-- Profile data refresh model:
-  - GamerTag and GamerScore: XBL profile sync every 20 minutes.
-  - Wi-Fi/XBL status indicators: checked every 60 seconds.
-  - Animation remains 12 FPS.
-- Static profile UI is not redrawn every animation frame.
-- The animation compositor retains only the necessary pixel protection without the previous large rectangular text boxes.
+- No intentional changes to the GamerID, GamerScore, status bars, Wi-Fi, XBL, SD, CBP, TLS/memory recovery, animation timing, display geometry or hardware pins.
+- v2.32 direct 208x208 -> 127x127 decode failed at the PNG decode stage and produced no gamerpic.
 
-### v2.27 physical baseline
+### Protected v2.31 recovery point
 
-V2.27 is the first confirmed compile-and-run baseline for the static profile compositor architecture.
-
-### Protected hardware/software architecture
-
-Do not change without evidence:
-
-- 181-frame / 12 FPS master animation
-- TFT geometry and pins
-- SD pins and requested 40 MHz operation
-- TFT 80 MHz operation
-- 32 KiB staging allocation and TLS memory-suspension ordering
-- NVS setup portal
-- background Wi-Fi startup
-- XBL/OpenXBL transport
-- gamerpic source/decode path
+V2.31 remains the protected physical recovery point and is not overwritten by the v2.33 experiment.
 
 ### Development rule
 
