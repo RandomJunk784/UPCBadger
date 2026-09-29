@@ -1,0 +1,1 @@
+v2.36 build evidence: fixed v2.35 Arduino prototype-order failure by forward-declaring GamerPicAreaContext and gamerPicEmitReadyRows before the full context definition. Gamerpic algorithm unchanged: 208x208 source, public LovyanGFX Pngle, area-weighted 208->127 RGB resampling, row-streamed output. v2.31 remains protected recovery. Arduino compile not run here.
