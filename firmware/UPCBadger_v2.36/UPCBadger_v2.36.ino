@@ -997,3 +997,6036 @@ static_assert(PBG_BLOCK_HEIGHT * PBG_WIDTH <= BLOCK_INDEX_BYTES,
 // File stores byte-swapped RGB565 so a direct uint16 load produces
 // the correct MSB-first bytes in little-endian ESP32 memory.
 static uint16_t palette565[PALETTE_ENTRIES];
+
+// ============================================================
+// LOVYANGFX
+// ============================================================
+
+class LGFX : public lgfx::LGFX_Device
+{
+  lgfx::Panel_GC9B72 panel;
+  lgfx::Bus_SPI bus;
+
+public:
+  LGFX()
+  {
+    auto cfg = bus.config();
+
+    cfg.spi_host  = VSPI_HOST;
+    cfg.spi_mode  = 0;
+    cfg.freq_write = TFT_SPI_HZ;
+    cfg.freq_read  = 16000000;
+
+    cfg.pin_sclk = TFT_SCLK;
+    cfg.pin_mosi = TFT_MOSI;
+    cfg.pin_miso = -1;
+    cfg.pin_dc   = TFT_DC;
+
+    cfg.dma_channel = SPI_DMA_CH_AUTO;
+
+    bus.config(cfg);
+    panel.setBus(&bus);
+
+    auto pc = panel.config();
+
+    pc.pin_cs   = TFT_CS;
+    pc.pin_rst  = TFT_RST;
+    pc.pin_busy = -1;
+
+    pc.panel_width  = PANEL_WIDTH;
+    pc.panel_height = PANEL_HEIGHT;
+    pc.memory_width = PANEL_WIDTH;
+    pc.memory_height = PANEL_HEIGHT;
+
+    pc.offset_x = 0;
+    pc.offset_y = 0;
+    pc.offset_rotation = 0;
+
+    pc.readable = false;
+    pc.invert = false;
+    pc.rgb_order = false;
+    pc.dlen_16bit = false;
+    pc.bus_shared = false;
+
+    panel.config(pc);
+    setPanel(&panel);
+  }
+};
+
+LGFX tft;
+SPIClass sdSPI(HSPI);
+
+// ============================================================
+// CBP STRUCTURES
+// ============================================================
+
+#pragma pack(push, 1)
+
+struct CBPHeader
+{
+  char magic[4];
+  uint16_t version;
+  uint16_t codec;
+  uint16_t width;
+  uint16_t height;
+
+  uint32_t fpsNum;
+  uint32_t fpsDen;
+  uint32_t frameCount;
+
+  // Decoded display bytes per frame.
+  uint32_t displayFrameBytes;
+
+  // Encoded palette-index bytes per frame.
+  uint32_t codedFrameBytes;
+
+  // Maximum raw index bytes represented by one LZ4 block.
+  uint32_t blockIndexBytes;
+
+  uint16_t indexEntryBytes;
+  uint16_t flags;
+
+  uint32_t indexOffset;
+  uint32_t dataOffset;
+};
+
+struct CBPIndexEntry
+{
+  uint32_t offset;
+  uint32_t storedBytes;
+  uint16_t blockCount;
+  uint16_t flags;
+  uint32_t crc32;
+};
+
+struct CBPBlockHeader
+{
+  uint32_t storedBytes;
+  uint16_t rawBytes;
+  uint8_t flags;
+  uint8_t reserved;
+};
+
+#pragma pack(pop)
+
+static_assert(sizeof(CBPHeader) <= CBP_HEADER_BYTES,
+              "CBP header larger than 64 bytes");
+
+static_assert(sizeof(CBPIndexEntry) == CBP_INDEX_ENTRY_BYTES,
+              "CBP index entry size mismatch");
+
+static_assert(sizeof(CBPBlockHeader) == 8,
+              "CBP block header size mismatch");
+
+// Guards against ever shrinking STAGE_BUFFER_BYTES below what a
+// single stageEnsure() call can require. If this fires, the staging
+// window is too small and reads will corrupt memory, not just fail
+// cleanly - this must stay a compile-time check.
+static_assert(
+  STAGE_BUFFER_BYTES >= (sizeof(CBPBlockHeader) + BLOCK_INDEX_BYTES),
+  "STAGE_BUFFER_BYTES too small for one CBP block"
+);
+
+static CBPHeader cbpHeader;
+static CBPIndexEntry indexTable[FRAME_COUNT_EXPECTED];
+
+// ============================================================
+// STAGING READER
+// ============================================================
+
+struct StageReader
+{
+  File *file = nullptr;
+
+  size_t beginPos = 0;
+  size_t endPos = 0;
+
+  uint32_t fileRemaining = 0;
+
+  uint64_t sdUs = 0;
+  uint64_t stageUs = 0;
+};
+
+
+// ============================================================
+// V2.16 PERMANENT CRASH / HEAP DIAGNOSTICS
+// ============================================================
+// Diagnostic instrumentation only.
+// Product logic, including the gamerpic renderer, is unchanged.
+// ============================================================
+
+#define BADGER_DIAG_MAGIC 0x42444731UL
+#define BADGER_DIAG_VERSION 1
+
+#define DIAG_BOOT_BEGIN                1
+#define DIAG_TFT_READY                 2
+#define DIAG_SD_READY                  3
+#define DIAG_PROFILE_ACTIVE            4
+#define DIAG_WIFI_START                5
+#define DIAG_WIFI_CONNECTED            6
+#define DIAG_SYNC_BEGIN                7
+#define DIAG_DNS_OK                    8
+#define DIAG_TCP80_OK                  9
+#define DIAG_TCP443_OK                10
+#define DIAG_TLS_OK                   11
+#define DIAG_XBL_LOOKUP_BEGIN         12
+#define DIAG_XBL_GET_RETURNED         13
+#define DIAG_GAMERPIC_DOWNLOAD_BEGIN  14
+#define DIAG_GAMERPIC_DOWNLOAD_DONE   15
+#define DIAG_PRESENCE_DONE            16
+#define DIAG_SYNC_COMPLETE            17
+#define DIAG_STAGING_RESTORE_BEGIN    18
+#define DIAG_STAGING_MALLOC_FAIL      19
+#define DIAG_STAGING_MALLOC_OK        20
+#define DIAG_STAGING_INDEX_OK         21
+#define DIAG_STAGING_RESTORE_DONE     22
+#define DIAG_RUNTIME_HEARTBEAT        23
+
+RTC_DATA_ATTR static uint32_t badgerDiagMagic = 0;
+RTC_DATA_ATTR static uint16_t badgerDiagVersion = 0;
+RTC_DATA_ATTR static uint16_t badgerDiagCheckpointCode = 0;
+RTC_DATA_ATTR static uint32_t badgerDiagSequence = 0;
+RTC_DATA_ATTR static uint32_t badgerDiagMillis = 0;
+RTC_DATA_ATTR static uint32_t badgerDiagFreeHeap = 0;
+RTC_DATA_ATTR static uint32_t badgerDiagLargestDefault = 0;
+RTC_DATA_ATTR static uint32_t badgerDiagLargestInternal8 = 0;
+RTC_DATA_ATTR static char badgerDiagLabel[48] = {0};
+
+static void badgerDiagCheckpoint(
+  uint16_t code,
+  const char *label
+)
+{
+  badgerDiagMagic = BADGER_DIAG_MAGIC;
+  badgerDiagVersion = BADGER_DIAG_VERSION;
+  badgerDiagCheckpointCode = code;
+  badgerDiagSequence++;
+  badgerDiagMillis = millis();
+  badgerDiagFreeHeap = ESP.getFreeHeap();
+
+  badgerDiagLargestDefault =
+    (uint32_t)heap_caps_get_largest_free_block(
+      MALLOC_CAP_DEFAULT
+    );
+
+  badgerDiagLargestInternal8 =
+    (uint32_t)heap_caps_get_largest_free_block(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+    );
+
+  strncpy(
+    badgerDiagLabel,
+    label,
+    sizeof(badgerDiagLabel) - 1
+  );
+
+  badgerDiagLabel[
+    sizeof(badgerDiagLabel) - 1
+  ] = '\0';
+
+  Serial.print("[CRASHDIAG] CHECKPOINT #");
+  Serial.print(badgerDiagSequence);
+  Serial.print(" code=");
+  Serial.print(code);
+  Serial.print(" label=");
+  Serial.println(label);
+}
+
+static void badgerDiagHeap(
+  const char *where
+)
+{
+  const uint32_t defaultFree =
+    (uint32_t)heap_caps_get_free_size(
+      MALLOC_CAP_DEFAULT
+    );
+
+  const uint32_t defaultLargest =
+    (uint32_t)heap_caps_get_largest_free_block(
+      MALLOC_CAP_DEFAULT
+    );
+
+  const uint32_t internal8Free =
+    (uint32_t)heap_caps_get_free_size(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+    );
+
+  const uint32_t internal8Largest =
+    (uint32_t)heap_caps_get_largest_free_block(
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+    );
+
+  Serial.print("[CRASHDIAG] HEAP ");
+  Serial.println(where);
+
+  Serial.print("[CRASHDIAG]   ESP.free=");
+  Serial.println(ESP.getFreeHeap());
+
+  Serial.print("[CRASHDIAG]   ESP.largest=");
+  Serial.println(ESP.getMaxAllocHeap());
+
+  Serial.print("[CRASHDIAG]   DEFAULT.free=");
+  Serial.println(defaultFree);
+
+  Serial.print("[CRASHDIAG]   DEFAULT.largest=");
+  Serial.println(defaultLargest);
+
+  Serial.print("[CRASHDIAG]   INTERNAL8.free=");
+  Serial.println(internal8Free);
+
+  Serial.print("[CRASHDIAG]   INTERNAL8.largest=");
+  Serial.println(internal8Largest);
+
+  Serial.print("[CRASHDIAG]   REQUIRED_STAGE=");
+  Serial.println((uint32_t)STAGE_BUFFER_BYTES);
+
+  Serial.print("[CRASHDIAG]   DEFAULT_CAN_FIT_32K=");
+  Serial.println(
+    defaultLargest >= (uint32_t)STAGE_BUFFER_BYTES
+      ? "YES"
+      : "NO"
+  );
+
+  Serial.print("[CRASHDIAG]   INTERNAL8_CAN_FIT_32K=");
+  Serial.println(
+    internal8Largest >= (uint32_t)STAGE_BUFFER_BYTES
+      ? "YES"
+      : "NO"
+  );
+}
+
+static void badgerDiagBootReport()
+{
+  Serial.println();
+  Serial.println("==========================================");
+  Serial.println(" V2.16 DIAGNOSTIC BOOT REPORT");
+  Serial.println("==========================================");
+
+  Serial.print("[CRASHDIAG] RESET_REASON=");
+  Serial.println(
+    (int)esp_reset_reason()
+  );
+
+  if (
+    badgerDiagMagic == BADGER_DIAG_MAGIC &&
+    badgerDiagVersion == BADGER_DIAG_VERSION
+  )
+  {
+    Serial.println(
+      "[CRASHDIAG] PREVIOUS_BREADCRUMB=FOUND"
+    );
+
+    Serial.print("[CRASHDIAG] PREVIOUS_CHECKPOINT=");
+    Serial.println(
+      badgerDiagCheckpointCode
+    );
+
+    Serial.print("[CRASHDIAG] PREVIOUS_LABEL=");
+    Serial.println(
+      badgerDiagLabel
+    );
+
+    Serial.print("[CRASHDIAG] PREVIOUS_SEQUENCE=");
+    Serial.println(
+      badgerDiagSequence
+    );
+
+    Serial.print("[CRASHDIAG] PREVIOUS_MILLIS=");
+    Serial.println(
+      badgerDiagMillis
+    );
+
+    Serial.print("[CRASHDIAG] PREVIOUS_FREE=");
+    Serial.println(
+      badgerDiagFreeHeap
+    );
+
+    Serial.print("[CRASHDIAG] PREVIOUS_DEFAULT_LARGEST=");
+    Serial.println(
+      badgerDiagLargestDefault
+    );
+
+    Serial.print("[CRASHDIAG] PREVIOUS_INTERNAL8_LARGEST=");
+    Serial.println(
+      badgerDiagLargestInternal8
+    );
+  }
+  else
+  {
+    Serial.println(
+      "[CRASHDIAG] PREVIOUS_BREADCRUMB=NONE"
+    );
+  }
+
+  badgerDiagHeap(
+    "BOOT"
+  );
+
+  Serial.println(
+    "=========================================="
+  );
+}
+
+
+
+static bool stageCompact(StageReader &r)
+{
+  if (r.beginPos == 0)
+    return true;
+
+  size_t leftover =
+    r.endPos - r.beginPos;
+
+  if (leftover > 0)
+  {
+    uint32_t start = micros();
+
+    memmove(
+      stageBuffer,
+      stageBuffer + r.beginPos,
+      leftover
+    );
+
+    r.stageUs +=
+      micros() - start;
+  }
+
+  r.beginPos = 0;
+  r.endPos = leftover;
+
+  return true;
+}
+
+static bool stageFill(StageReader &r)
+{
+  if (r.fileRemaining == 0)
+    return true;
+
+  if (r.endPos == STAGE_BUFFER_BYTES)
+  {
+    if (!stageCompact(r))
+      return false;
+  }
+
+  size_t freeSpace =
+    STAGE_BUFFER_BYTES - r.endPos;
+
+  size_t toRead =
+    min(
+      freeSpace,
+      (size_t)r.fileRemaining
+    );
+
+  uint32_t start = micros();
+
+  size_t got =
+    r.file->read(
+      stageBuffer + r.endPos,
+      toRead
+    );
+
+  r.sdUs +=
+    micros() - start;
+
+  if (got != toRead)
+  {
+    Serial.print("ERROR: stage read ");
+    Serial.print(got);
+    Serial.print("/");
+    Serial.println(toRead);
+    return false;
+  }
+
+  r.endPos += got;
+  r.fileRemaining -= got;
+
+  return true;
+}
+
+static bool stageEnsure(
+  StageReader &r,
+  size_t wanted
+)
+{
+  if (wanted > STAGE_BUFFER_BYTES)
+    return false;
+
+  while (
+    (r.endPos - r.beginPos) < wanted
+  )
+  {
+    if (r.fileRemaining == 0)
+      return false;
+
+    if (r.endPos == STAGE_BUFFER_BYTES)
+    {
+      if (!stageCompact(r))
+        return false;
+    }
+
+    if (!stageFill(r))
+      return false;
+  }
+
+  return true;
+}
+
+// ============================================================
+// LZ4 BLOCK DECODER
+// ============================================================
+
+static bool lz4DecompressBlock(
+  const uint8_t *src,
+  size_t srcSize,
+  uint8_t *dst,
+  size_t dstCapacity,
+  size_t expectedOutput,
+  size_t &written
+)
+{
+  size_t si = 0;
+  size_t di = 0;
+
+  while (si < srcSize)
+  {
+    uint8_t token = src[si++];
+
+    size_t literalLength =
+      token >> 4;
+
+    if (literalLength == 15)
+    {
+      while (true)
+      {
+        if (si >= srcSize)
+          return false;
+
+        uint8_t extra = src[si++];
+        literalLength += extra;
+
+        if (extra != 255)
+          break;
+      }
+    }
+
+    if (si + literalLength > srcSize)
+      return false;
+
+    if (di + literalLength > dstCapacity)
+      return false;
+
+    if (literalLength > 0)
+    {
+      memcpy(
+        dst + di,
+        src + si,
+        literalLength
+      );
+
+      si += literalLength;
+      di += literalLength;
+    }
+
+    if (si >= srcSize)
+      break;
+
+    if (si + 2 > srcSize)
+      return false;
+
+    uint16_t offset =
+      (uint16_t)src[si] |
+      ((uint16_t)src[si + 1] << 8);
+
+    si += 2;
+
+    if (offset == 0 || offset > di)
+      return false;
+
+    size_t matchLength =
+      (token & 0x0F) + 4;
+
+    if ((token & 0x0F) == 15)
+    {
+      while (true)
+      {
+        if (si >= srcSize)
+          return false;
+
+        uint8_t extra = src[si++];
+        matchLength += extra;
+
+        if (extra != 255)
+          break;
+      }
+    }
+
+    if (di + matchLength > dstCapacity)
+      return false;
+
+    size_t matchPos =
+      di - offset;
+
+    for (size_t i = 0;
+         i < matchLength;
+         ++i)
+    {
+      dst[di++] =
+        dst[matchPos + i];
+    }
+  }
+
+  written = di;
+
+  return written == expectedOutput;
+}
+
+// ============================================================
+// CBP HEADER / INDEX
+// ============================================================
+
+static bool loadCBPIndex(File &file)
+{
+  file.seek(0);
+
+  if (file.read(
+        (uint8_t *)&cbpHeader,
+        sizeof(cbpHeader)
+      ) != sizeof(cbpHeader))
+  {
+    Serial.println("ERROR: CBP header read failed");
+    return false;
+  }
+
+  if (memcmp(cbpHeader.magic, "CBP1", 4) != 0)
+  {
+    Serial.println("ERROR: CBP magic mismatch");
+    return false;
+  }
+
+  if (cbpHeader.version != CBP_VERSION ||
+      cbpHeader.codec != CBP_CODEC_PALETTE_LZ4)
+  {
+    Serial.println("ERROR: unsupported CBP codec/version");
+    return false;
+  }
+
+  if (cbpHeader.width != WIDTH ||
+      cbpHeader.height != HEIGHT)
+  {
+    Serial.println("ERROR: CBP geometry mismatch");
+    return false;
+  }
+
+  if (cbpHeader.frameCount != FRAME_COUNT_EXPECTED)
+  {
+    Serial.println("ERROR: CBP frame count mismatch");
+    return false;
+  }
+
+  if (cbpHeader.displayFrameBytes !=
+      DISPLAY_FRAME_BYTES)
+  {
+    Serial.println("ERROR: CBP display bytes mismatch");
+    return false;
+  }
+
+  if (cbpHeader.codedFrameBytes !=
+      FRAME_PIXELS)
+  {
+    Serial.println("ERROR: CBP coded bytes mismatch");
+    return false;
+  }
+
+  if (cbpHeader.blockIndexBytes !=
+      BLOCK_INDEX_BYTES)
+  {
+    Serial.println("ERROR: CBP block size mismatch");
+    return false;
+  }
+
+  if (!(cbpHeader.flags & DIRECT_DMA_FLAG))
+  {
+    Serial.println("ERROR: CBP is not DIRECT-DMA");
+    return false;
+  }
+
+  if (!(cbpHeader.flags & PALETTE_FLAG))
+  {
+    Serial.println("ERROR: CBP is not palette encoded");
+    return false;
+  }
+
+  if (cbpHeader.indexEntryBytes !=
+      sizeof(CBPIndexEntry))
+  {
+    Serial.println("ERROR: CBP index entry mismatch");
+    return false;
+  }
+
+  if (cbpHeader.indexOffset != CBP_HEADER_BYTES ||
+      cbpHeader.dataOffset != CBP_DATA_OFFSET)
+  {
+    Serial.println("ERROR: CBP offsets mismatch");
+    return false;
+  }
+
+  file.seek(cbpHeader.indexOffset);
+
+  size_t indexBytes =
+    cbpHeader.frameCount *
+    sizeof(CBPIndexEntry);
+
+  if (file.read(
+        (uint8_t *)indexTable,
+        indexBytes
+      ) != indexBytes)
+  {
+    Serial.println("ERROR: CBP index read failed");
+    return false;
+  }
+
+  uint64_t sum = 0;
+  for (uint32_t i = 0;
+       i < cbpHeader.frameCount;
+       ++i)
+  {
+    sum +=
+      indexTable[i].storedBytes;
+
+  }
+
+  return true;
+}
+
+// ============================================================
+// LOAD FRAME PALETTE
+// ============================================================
+
+static bool loadPalette(StageReader &reader)
+{
+  if (!stageEnsure(reader, PALETTE_BYTES))
+    return false;
+
+  memcpy(
+    palette565,
+    stageBuffer + reader.beginPos,
+    PALETTE_BYTES
+  );
+
+  reader.beginPos +=
+    PALETTE_BYTES;
+
+  if (reader.beginPos == reader.endPos)
+  {
+    reader.beginPos = 0;
+    reader.endPos = 0;
+  }
+  else if (reader.beginPos >= (STAGE_BUFFER_BYTES / 2))
+  {
+    stageCompact(reader);
+  }
+
+  return true;
+}
+
+// ============================================================
+// PREPARE NEXT CBP BLOCK
+// ============================================================
+
+static bool prepareNextBlock(
+  StageReader &reader,
+  uint8_t *destination,
+  size_t &pixelCount,
+  uint32_t &decodeUs
+)
+{
+  if (!stageEnsure(
+        reader,
+        sizeof(CBPBlockHeader)
+      ))
+  {
+    return false;
+  }
+
+  CBPBlockHeader bh;
+
+  memcpy(
+    &bh,
+    stageBuffer + reader.beginPos,
+    sizeof(bh)
+  );
+
+  if (bh.rawBytes == 0 ||
+      bh.rawBytes > BLOCK_INDEX_BYTES ||
+      bh.storedBytes == 0 ||
+      bh.storedBytes > BLOCK_INDEX_BYTES)
+  {
+    Serial.println("ERROR: invalid CBP block");
+    return false;
+  }
+
+  size_t fullBytes =
+    sizeof(CBPBlockHeader) +
+    (size_t)bh.storedBytes;
+
+  if (!stageEnsure(reader, fullBytes))
+    return false;
+
+  const uint8_t *src =
+    stageBuffer +
+    reader.beginPos +
+    sizeof(CBPBlockHeader);
+
+  uint32_t startDecode = micros();
+
+  size_t indexBytesWritten = 0;
+
+  if (bh.flags & 0x01)
+  {
+    if (bh.storedBytes != bh.rawBytes)
+      return false;
+
+    memcpy(
+      destination,
+      src,
+      bh.rawBytes
+    );
+
+    indexBytesWritten =
+      bh.rawBytes;
+  }
+  else
+  {
+    if (!lz4DecompressBlock(
+          src,
+          bh.storedBytes,
+          destination,
+          16384,
+          bh.rawBytes,
+          indexBytesWritten
+        ))
+    {
+      return false;
+    }
+  }
+
+  // The index bytes are at the start of the same 32 KiB DMA buffer.
+  // Expand backwards in-place to RGB565 so the source indices are
+  // never overwritten before they are consumed.
+  uint16_t *pixels =
+    reinterpret_cast<uint16_t *>(destination);
+
+  for (size_t i = indexBytesWritten;
+       i > 0;
+       --i)
+  {
+    size_t n = i - 1;
+
+    uint8_t index =
+      destination[n];
+
+    pixels[n] =
+      palette565[index];
+  }
+
+  pixelCount =
+    indexBytesWritten;
+
+  decodeUs +=
+    micros() - startDecode;
+
+  reader.beginPos += fullBytes;
+
+  if (reader.beginPos == reader.endPos)
+  {
+    reader.beginPos = 0;
+    reader.endPos = 0;
+  }
+  else if (reader.beginPos >= (STAGE_BUFFER_BYTES / 2))
+  {
+    stageCompact(reader);
+  }
+
+  return true;
+}
+
+// ============================================================
+// PIPELINED FRAME
+// ============================================================
+
+static bool playFramePipelined(
+  File &file,
+  uint32_t frameIndex,
+  uint32_t &frameUs,
+  uint32_t &sdUs,
+  uint32_t &decodeUs,
+  uint32_t &dmaUs,
+  uint32_t &stageUs
+)
+{
+  const CBPIndexEntry &entry =
+    indexTable[frameIndex];
+
+  StageReader reader;
+
+  reader.file = &file;
+  reader.beginPos = 0;
+  reader.endPos = 0;
+
+  reader.fileRemaining =
+    entry.storedBytes;
+
+  uint8_t *current =
+    dmaBufferA;
+
+  uint8_t *next =
+    dmaBufferB;
+
+  size_t currentPixels = 0;
+  size_t nextPixels = 0;
+
+  uint32_t frameStart =
+    micros();
+
+  // Palette comes first in every frame.
+  if (!loadPalette(reader))
+    return false;
+
+  // Decode the first block before starting DMA.
+  if (!prepareNextBlock(
+        reader,
+        current,
+        currentPixels,
+        decodeUs
+      ))
+  {
+    return false;
+  }
+
+  tft.startWrite();
+
+  // Single 330x350 address window.
+  // The 18-pixel side margins on the 360x360 panel are never sent.
+  tft.setAddrWindow(
+    WINDOW_X,
+    WINDOW_Y,
+    WIDTH,
+    HEIGHT
+  );
+
+  uint32_t pixelsSent = 0;
+
+  const uint16_t blockCount =
+    entry.blockCount;
+
+  if (blockCount == 0)
+  {
+    tft.endWrite();
+    return false;
+  }
+
+  for (uint16_t block = 0;
+       block < blockCount;
+       ++block)
+  {
+    tft.writePixelsDMA(
+      reinterpret_cast<uint16_t *>(current),
+      currentPixels,
+      false
+    );
+
+    bool haveNext = false;
+
+    if (block + 1 < blockCount)
+    {
+      haveNext =
+        prepareNextBlock(
+          reader,
+          next,
+          nextPixels,
+          decodeUs
+        );
+
+      if (!haveNext)
+      {
+        uint32_t waitStart =
+          micros();
+
+        tft.waitDMA();
+
+        dmaUs +=
+          micros() - waitStart;
+
+        tft.endWrite();
+        return false;
+      }
+    }
+
+    uint32_t waitStart =
+      micros();
+
+    tft.waitDMA();
+
+    dmaUs +=
+      micros() - waitStart;
+
+    pixelsSent +=
+      currentPixels;
+
+    if (!haveNext)
+      break;
+
+    uint8_t *tmp =
+      current;
+
+    current = next;
+    next = tmp;
+
+    currentPixels =
+      nextPixels;
+
+    nextPixels = 0;
+  }
+
+  tft.endWrite();
+
+  frameUs =
+    micros() - frameStart;
+
+  if (reader.fileRemaining != 0)
+  {
+    Serial.println(
+      "ERROR: CBP frame not fully consumed"
+    );
+
+    return false;
+  }
+
+  if (reader.beginPos != reader.endPos)
+  {
+    Serial.println(
+      "ERROR: CBP stage data not exhausted"
+    );
+
+    return false;
+  }
+
+  if (pixelsSent != FRAME_PIXELS)
+  {
+    Serial.print(
+      "ERROR: pixels sent "
+    );
+    Serial.print(pixelsSent);
+    Serial.print(" expected ");
+    Serial.println(FRAME_PIXELS);
+    return false;
+  }
+
+  sdUs =
+    (uint32_t)reader.sdUs;
+
+  stageUs =
+    (uint32_t)reader.stageUs;
+
+  return true;
+}
+
+
+
+// ============================================================
+// CONSOLEBADGER PRODUCT LAYER
+// KNOWN-GOOD BOOT -> SETUP CHECK -> GAMER PAGE -> WIFI
+// ============================================================
+
+#define CONFIG_BUTTON_PIN 32
+#define CONFIG_HOLD_MS 3000UL
+#define FACTORY_RESET_HOLD_MS 15000UL
+
+// Forward declaration before early callers.
+static void startConfigMode(bool preserveDisplay);
+
+
+enum ConsoleMode : uint8_t
+{
+  MODE_XBOX = 0,
+  MODE_PLAYSTATION = 1,
+  MODE_NINTENDO = 2
+};
+
+static ConsoleMode consoleMode = MODE_XBOX;
+
+static WebServer setupServer(80);
+static DNSServer setupDNS;
+static Preferences setupPrefs;
+
+static String savedSSID;
+static String savedPassword;
+static String savedGamerID;
+
+static bool configMode = false;
+static bool preserveSetupDisplay = false;
+static bool configButtonLatched = false;
+static uint32_t configButtonDownMs = 0;
+
+
+// ------------------------------------------------------------
+// Background product services.
+// These start only AFTER the known-good Xbox boot has completed.
+// ------------------------------------------------------------
+
+#define PROFILE_SYNC_INTERVAL_MS (20UL * 60UL * 1000UL)
+#define PROFILE_STATUS_REFRESH_INTERVAL_MS (60UL * 1000UL)
+#define PROFILE_XBL_PRESENCE_INTERVAL_MS (5UL * 60UL * 1000UL)
+
+// Static overlay geometry. These are deliberately tight rectangles, not
+// full-width horizontal bands. The animation is allowed to update everywhere
+// else at 12 FPS.
+// Profile: invisible anti-flicker footprints only.
+#define PROFILE_PIC_X0 120
+#define PROFILE_PIC_Y0 120
+#define PROFILE_PIC_X1 240
+#define PROFILE_PIC_Y1 240
+#define PROFILE_PIC_CENTER_X 180
+#define PROFILE_PIC_CENTER_Y 180
+#define PROFILE_PIC_IMAGE_RADIUS 63
+#define PROFILE_PIC_SOURCE_W 72
+#define PROFILE_PIC_SOURCE_H 72
+
+// V2.23: only the gamerpic is protected during animation playback.
+// Text and status overlays are redrawn after every frame, so no rectangular
+// frozen fields remain visible behind them.
+#define PROFILE_PROTECT_PIC    0x10u
+#define PROFILE_PROTECT_ALL    PROFILE_PROTECT_PIC
+
+
+static bool productProfileActive = false;
+static bool homeWiFiStarted = false;
+static uint32_t lastHomeWiFiAttemptMs = 0;
+static bool homeWiFiReported = false;
+static wl_status_t lastHomeWiFiStatus = WL_NO_SHIELD;
+static uint32_t lastProfileSyncMs = 0;
+static uint32_t lastProfileWifiRefreshMs = 0;
+static uint32_t lastProfilePresenceCheckMs = 0;
+static bool profileApiInitialSyncPending = false;
+static bool profileGamerOverlayDirty = false;
+static bool profileWifiOverlayDirty = false;
+static bool profileApiAvailable = false;
+static bool liveXboxOnline = false;
+static bool liveXboxPresenceKnown = false;
+static bool liveProfileInitialised = false;
+static String cachedGamerPicURL;
+static String liveGamerID;
+static String liveXUID;
+static uint32_t liveGamerScore = 0;
+static String liveGamerPicURL;
+
+// ------------------------------------------------------------
+// Static profile compositor
+// ------------------------------------------------------------
+// The display is write-only, so the animation must carry the static UI
+// pixels forward without issuing a second drawString pass every frame.
+// We render the Orbitron text into a tiny temporary sprite only when the
+// displayed value changes, compress its non-zero pixels into 1-bit masks,
+// then composite those masks directly into each animation row.
+// ------------------------------------------------------------
+#define PROFILE_GAMER_MASK_W 184
+#define PROFILE_GAMER_MASK_H 32
+#define PROFILE_SCORE_MASK_W 160
+#define PROFILE_SCORE_MASK_H 32
+#define PROFILE_STATUS_Y 109
+#define PROFILE_STATUS_THICKNESS 2
+#define PROFILE_STATUS_GAP 6
+
+static inline uint16_t profileDirectDMARGB565(
+  uint8_t r,
+  uint8_t g,
+  uint8_t b
+)
+{
+  const uint16_t logical =
+    (uint16_t)(
+      ((r & 0xF8) << 8) |
+      ((g & 0xFC) << 3) |
+      (b >> 3)
+    );
+
+  // CBP palette entries are stored byte-swapped for writePixelsDMA(..., false).
+  return (uint16_t)((logical << 8) | (logical >> 8));
+}
+
+static uint8_t profileGamerMask[(PROFILE_GAMER_MASK_W * PROFILE_GAMER_MASK_H + 7) / 8] = {};
+static uint8_t profileScoreMask[(PROFILE_SCORE_MASK_W * PROFILE_SCORE_MASK_H + 7) / 8] = {};
+
+static bool profileOverlayRasterReady = false;
+static int profileGamerMaskX0 = PROFILE_PIC_CENTER_X - (PROFILE_GAMER_MASK_W / 2);
+static int profileGamerMaskY0 = 97 - (PROFILE_GAMER_MASK_H / 2);
+static int profileScoreMaskX0 = PROFILE_PIC_CENTER_X - (PROFILE_SCORE_MASK_W / 2);
+static int profileScoreMaskY0 = 255 - (PROFILE_SCORE_MASK_H / 2);
+static int profileGamerWidth = 0;
+static bool profileBarWifiConnected = false;
+static bool profileBarXblOnline = false;
+static bool profileBarXblKnown = false;
+static uint32_t lastProfileStatusRefreshMs = 0;
+
+// ------------------------------------------------------------
+// Xbox profile / live-data state.
+// V1.46 uses OpenXBL for a controlled live-profile test.
+// The real API key lives only in local Secrets.h.
+// ------------------------------------------------------------
+
+static uint16_t productRGB565(
+  uint8_t r,
+  uint8_t g,
+  uint8_t b
+)
+{
+  return (uint16_t)(
+    ((r & 0xF8) << 8) |
+    ((g & 0xFC) << 3) |
+    (b >> 3)
+  );
+}
+
+static uint16_t productScale565(
+  uint16_t c,
+  uint8_t amount
+)
+{
+  if (amount == 255)
+    return c;
+
+  uint32_t r = (c >> 11) & 0x1F;
+  uint32_t g = (c >> 5) & 0x3F;
+  uint32_t b = c & 0x1F;
+
+  r = (r * amount + 127) / 255;
+  g = (g * amount + 127) / 255;
+  b = (b * amount + 127) / 255;
+
+  return (uint16_t)(
+    (r << 11) |
+    (g << 5) |
+    b
+  );
+}
+
+static uint16_t xboxGreen(uint8_t a = 255)
+{
+  return productScale565(
+    productRGB565(0, 255, 45),
+    a
+  );
+}
+
+static uint16_t xboxGreen2(uint8_t a = 255)
+{
+  return productScale565(
+    productRGB565(0, 175, 35),
+    a
+  );
+}
+
+static uint16_t xboxGreen3(uint8_t a = 255)
+{
+  return productScale565(
+    productRGB565(0, 85, 18),
+    a
+  );
+}
+
+static uint16_t productWhite(uint8_t a = 255)
+{
+  return productScale565(
+    productRGB565(215, 225, 220),
+    a
+  );
+}
+
+static String gamerInitials(String value)
+{
+  value.trim();
+  value.toUpperCase();
+
+  if (value.length() == 0)
+    return "X";
+
+  if (value.length() > 2)
+    value = value.substring(0, 2);
+
+  return value;
+}
+
+static void productText(
+  const String &value,
+  int x,
+  int y,
+  uint16_t color,
+  const lgfx::IFont *font,
+  textdatum_t datum = textdatum_t::middle_center
+)
+{
+  tft.setTextDatum(datum);
+  tft.setFont(font);
+  tft.setTextColor(color, TFT_BLACK);
+  tft.drawString(value, x, y);
+}
+
+// ------------------------------------------------------------
+// Gamer page
+// ------------------------------------------------------------
+
+
+// ------------------------------------------------------------
+// ------------------------------------------------------------
+// Animated profile energy-field background
+// ------------------------------------------------------------
+
+// Single full-screen Lumina animation.
+#define PROFILE_ANIM_FILE CBP_FILE
+#define PROFILE_ANIM_VERSION 1
+#define PROFILE_ANIM_CODEC 2
+#define PROFILE_ANIM_WIDTH 360
+#define PROFILE_ANIM_HEIGHT 360
+#define PROFILE_ANIM_MAX_FRAMES 200
+#define PROFILE_ANIM_HEADER_BYTES 64
+#define PROFILE_ANIM_INDEX_ENTRY_BYTES 16
+#define PROFILE_ANIM_FPS_NUM 12
+#define PROFILE_ANIM_FPS_DEN 1
+#define PROFILE_ANIM_FRAME_INTERVAL_US 83333UL
+
+static CBPHeader profileAnimHeader;
+static CBPIndexEntry profileAnimIndex[PROFILE_ANIM_MAX_FRAMES];
+static File profileAnimFile;
+static bool profileAnimReady = false;
+static uint32_t profileAnimFrame = 0;
+static uint32_t profileAnimNextUs = 0;
+
+static bool validateCBPIndex(
+  File &file,
+  CBPHeader &header,
+  CBPIndexEntry *index,
+  uint32_t maxFrames,
+  uint16_t expectedWidth,
+  uint16_t expectedHeight,
+  const char *label
+)
+{
+  if (
+    file.read(
+      (uint8_t *)&header,
+      sizeof(header)
+    ) != sizeof(header)
+  )
+  {
+    Serial.print("[PROFILE] ");
+    Serial.print(label);
+    Serial.println(" header read failed.");
+    return false;
+  }
+
+  if (
+    memcmp(header.magic, "CBP1", 4) != 0 ||
+    header.version != PROFILE_ANIM_VERSION ||
+    header.codec != PROFILE_ANIM_CODEC ||
+    header.width != expectedWidth ||
+    header.height != expectedHeight ||
+    header.frameCount == 0 ||
+    header.frameCount > maxFrames ||
+    header.displayFrameBytes !=
+      (uint32_t)expectedWidth * expectedHeight * 2UL ||
+    header.codedFrameBytes !=
+      (uint32_t)expectedWidth * expectedHeight ||
+    header.blockIndexBytes != BLOCK_INDEX_BYTES ||
+    header.indexEntryBytes != sizeof(CBPIndexEntry) ||
+    !(header.flags & DIRECT_DMA_FLAG) ||
+    !(header.flags & PALETTE_FLAG) ||
+    header.indexOffset != PROFILE_ANIM_HEADER_BYTES ||
+    header.dataOffset !=
+      PROFILE_ANIM_HEADER_BYTES +
+      header.frameCount * PROFILE_ANIM_INDEX_ENTRY_BYTES
+  )
+  {
+    Serial.print("[PROFILE] ");
+    Serial.print(label);
+    Serial.println(" header invalid.");
+    return false;
+  }
+
+  file.seek(header.indexOffset);
+
+  const size_t bytes =
+    header.frameCount * sizeof(CBPIndexEntry);
+
+  if (
+    file.read(
+      (uint8_t *)index,
+      bytes
+    ) != bytes
+  )
+  {
+    Serial.print("[PROFILE] ");
+    Serial.print(label);
+    Serial.println(" index read failed.");
+    return false;
+  }
+
+  const uint64_t fileSize =
+    (uint64_t)file.size();
+
+  for (uint32_t i = 0; i < header.frameCount; ++i)
+  {
+    const CBPIndexEntry &e = index[i];
+    const uint64_t end =
+      (uint64_t)e.offset + (uint64_t)e.storedBytes;
+
+    if (
+      e.offset < header.dataOffset ||
+      e.storedBytes == 0 ||
+      e.blockCount == 0 ||
+      end > fileSize
+    )
+    {
+      Serial.print("[PROFILE] ");
+      Serial.print(label);
+      Serial.println(" index invalid.");
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static bool loadProfileAnimIndex()
+{
+  profileAnimFile =
+    SD.open(
+      PROFILE_ANIM_FILE,
+      FILE_READ
+    );
+
+  if (!profileAnimFile)
+  {
+    Serial.println(
+      "[PROFILE] Base animation asset not found."
+    );
+    return false;
+  }
+
+  if (!validateCBPIndex(
+        profileAnimFile,
+        profileAnimHeader,
+        profileAnimIndex,
+        PROFILE_ANIM_MAX_FRAMES,
+        PROFILE_ANIM_WIDTH,
+        PROFILE_ANIM_HEIGHT,
+        "Base animation"
+      ))
+  {
+    profileAnimFile.close();
+    return false;
+  }
+
+  profileAnimReady = true;
+
+  Serial.print(
+    "[PROFILE] Master animation ready: "
+  );
+  Serial.print(profileAnimHeader.frameCount);
+  Serial.println(" frames @ 12 FPS.");
+
+  return true;
+}
+
+static uint32_t profileProtectMask = PROFILE_PROTECT_PIC;
+
+// Forward declaration: the compositor helper is defined with the other
+// profile UI helpers later in the source, but the frame writer uses it.
+static inline void applyProfileStaticOverlayToRow(
+  uint16_t *rowBuffer,
+  int rowY,
+  int xStart,
+  int count
+);
+
+static bool playProfileFramePipelined(
+  File &file,
+  const CBPIndexEntry *indexTableLocal,
+  uint32_t frameIndex,
+  uint32_t frameWidth,
+  uint32_t frameHeight,
+  uint32_t displayY,
+  uint32_t &frameUs,
+  uint32_t &sdUs,
+  uint32_t &decodeUs,
+  uint32_t &dmaUs,
+  uint32_t &stageUs
+)
+{
+  const CBPIndexEntry &entry = indexTableLocal[frameIndex];
+
+  if (!file.seek(entry.offset))
+  {
+    Serial.println("[PROFILE] CBP frame seek failed.");
+    return false;
+  }
+
+  StageReader reader;
+  reader.file = &file;
+  reader.beginPos = 0;
+  reader.endPos = 0;
+  reader.fileRemaining = entry.storedBytes;
+
+  uint8_t *current = dmaBufferA;
+  uint8_t *next = dmaBufferB;
+  size_t currentPixels = 0;
+  size_t nextPixels = 0;
+  // The overlay row buffer is needed only for this frame write. Keep it on
+  // the task stack instead of DRAM .bss so the existing memory budget is not
+  // increased. The physical animation width is fixed at 360 pixels.
+  uint16_t profileOverlayRow[360];
+  uint32_t frameStart = micros();
+
+  if (!loadPalette(reader))
+    return false;
+
+  if (!prepareNextBlock(reader, current, currentPixels, decodeUs))
+    return false;
+
+  tft.startWrite();
+
+  uint32_t pixelsSent = 0;
+  const uint16_t blockCount = entry.blockCount;
+
+  const uint32_t totalPixels = frameWidth * frameHeight;
+
+  for (uint16_t block = 0; block < blockCount; ++block)
+  {
+    const uint32_t blockStart = pixelsSent;
+    const uint32_t blockEnd = blockStart + currentPixels;
+    uint32_t cursor = blockStart;
+
+    // V2.25: protect only the actual circular gamerpic image.
+    // Text/status/score are transparent overlays and are redrawn after each frame.
+    while (cursor < blockEnd)
+    {
+      const uint32_t row = cursor / frameWidth;
+      const uint32_t col = cursor % frameWidth;
+      const uint32_t rowEnd = min(blockEnd, (row + 1UL) * frameWidth);
+      uint32_t nextCut = rowEnd;
+
+      bool insideProtected = false;
+      uint32_t protectedEnd = rowEnd;
+
+      // V2.25: static profile text/status is composited into the outgoing
+      // animation row. This preserves the live pixels without a separate
+      // drawString/drawLine pass after every frame. V2.28 packs the status
+      // colour in the same direct-DMA format as the CBP palette.
+      const bool rowHasStaticOverlay =
+        profileOverlayRasterReady &&
+        (
+          (row >= (uint32_t)profileGamerMaskY0 &&
+           row < (uint32_t)(profileGamerMaskY0 + PROFILE_GAMER_MASK_H)) ||
+          (row >= (uint32_t)PROFILE_STATUS_Y &&
+           row < (uint32_t)(PROFILE_STATUS_Y + PROFILE_STATUS_THICKNESS)) ||
+          (row >= (uint32_t)profileScoreMaskY0 &&
+           row < (uint32_t)(profileScoreMaskY0 + PROFILE_SCORE_MASK_H))
+        );
+
+      if (rowHasStaticOverlay)
+      {
+        const int rowCount =
+          (int)(rowEnd - cursor);
+
+        memcpy(
+          profileOverlayRow,
+          reinterpret_cast<uint16_t *>(current) + (cursor - blockStart),
+          (size_t)rowCount * sizeof(uint16_t)
+        );
+
+        applyProfileStaticOverlayToRow(
+          profileOverlayRow,
+          (int)row,
+          (int)col,
+          rowCount
+        );
+
+        tft.setAddrWindow(
+          (int)col,
+          displayY + (int)row,
+          rowCount,
+          1
+        );
+
+        const uint32_t waitStart = micros();
+        tft.writePixelsDMA(
+          profileOverlayRow,
+          rowCount,
+          false
+        );
+        tft.waitDMA();
+        dmaUs += micros() - waitStart;
+
+        cursor = rowEnd;
+        continue;
+      }
+
+      if (profileProtectMask != 0)
+      {
+        // V2.25: preserve ONLY the actual circular gamerpic image.
+        if (
+          (profileProtectMask & PROFILE_PROTECT_PIC) &&
+          row >= (uint32_t)(PROFILE_PIC_CENTER_Y - PROFILE_PIC_IMAGE_RADIUS) &&
+          row <= (uint32_t)(PROFILE_PIC_CENTER_Y + PROFILE_PIC_IMAGE_RADIUS)
+        )
+        {
+          const int dy =
+            (int)row -
+            PROFILE_PIC_CENTER_Y;
+
+          const int radius =
+            PROFILE_PIC_IMAGE_RADIUS;
+
+          const int remaining =
+            radius * radius -
+            dy * dy;
+
+          if (remaining >= 0)
+          {
+            const int half =
+              (int)sqrtf(
+                (float)remaining
+              );
+
+            const uint32_t picX0 =
+              (uint32_t)(
+                PROFILE_PIC_CENTER_X -
+                half
+              );
+
+            const uint32_t picX1 =
+              (uint32_t)(
+                PROFILE_PIC_CENTER_X +
+                half +
+                1
+              );
+
+            if (
+              col >= picX0 &&
+              col < picX1
+            )
+            {
+              insideProtected =
+                true;
+
+              protectedEnd =
+                min(
+                  protectedEnd,
+                  picX1
+                );
+            }
+            else if (col < picX0)
+            {
+              nextCut =
+                min(
+                  nextCut,
+                  picX0 +
+                  row * frameWidth
+                );
+            }
+          }
+        }
+      }
+
+      if (insideProtected)
+      {
+        cursor = min(blockEnd, protectedEnd + row * frameWidth);
+        continue;
+      }
+
+      if (nextCut <= cursor)
+        break;
+
+      const uint32_t count = nextCut - cursor;
+      const uint32_t writeRow = cursor / frameWidth;
+      const uint32_t writeCol = cursor % frameWidth;
+
+      tft.setAddrWindow(
+        writeCol,
+        displayY + writeRow,
+        count <= (frameWidth - writeCol) ? count : (frameWidth - writeCol),
+        1
+      );
+
+      uint32_t sent = 0;
+      while (sent < count)
+      {
+        const uint32_t rowRemaining = frameWidth - ((writeCol + sent) % frameWidth);
+        const uint32_t chunk = min(count - sent, rowRemaining);
+
+        if (sent != 0)
+        {
+          tft.setAddrWindow(
+            (writeCol + sent) % frameWidth,
+            displayY + (cursor + sent) / frameWidth,
+            chunk,
+            1
+          );
+        }
+
+        const uint32_t waitStart = micros();
+        tft.writePixelsDMA(
+          reinterpret_cast<uint16_t *>(current) + (cursor - blockStart) + sent,
+          chunk,
+          false
+        );
+        tft.waitDMA();
+        dmaUs += micros() - waitStart;
+        sent += chunk;
+      }
+
+      cursor = nextCut;
+    }
+
+    bool haveNext = false;
+    if (block + 1 < blockCount)
+    {
+      haveNext = prepareNextBlock(reader, next, nextPixels, decodeUs);
+      if (!haveNext)
+      {
+        tft.waitDMA();
+        tft.endWrite();
+        return false;
+      }
+    }
+
+    pixelsSent += currentPixels;
+
+    if (!haveNext)
+      break;
+
+    uint8_t *tmp = current;
+    current = next;
+    next = tmp;
+    currentPixels = nextPixels;
+    nextPixels = 0;
+  }
+
+  tft.endWrite();
+
+  frameUs = micros() - frameStart;
+
+  if (reader.fileRemaining != 0 ||
+      reader.beginPos != reader.endPos ||
+      pixelsSent != totalPixels)
+  {
+    Serial.println("[PROFILE] Profile animation frame validation failed.");
+    return false;
+  }
+
+  sdUs = (uint32_t)reader.sdUs;
+  stageUs = (uint32_t)reader.stageUs;
+  return true;
+}
+
+static bool renderProfileAnimationFrame(uint32_t frameIndex, uint32_t protectMask = PROFILE_PROTECT_PIC)
+{
+  profileProtectMask = protectMask;
+  if (!profileAnimReady || !profileAnimFile)
+    return false;
+
+  if (frameIndex >= profileAnimHeader.frameCount)
+    frameIndex = 0;
+
+  uint32_t frameUs = 0;
+  uint32_t sdUs = 0;
+  uint32_t decodeUs = 0;
+  uint32_t dmaUs = 0;
+  uint32_t stageUs = 0;
+
+  return playProfileFramePipelined(
+    profileAnimFile,
+    profileAnimIndex,
+    frameIndex,
+    PROFILE_ANIM_WIDTH,
+    PROFILE_ANIM_HEIGHT,
+    0,
+    frameUs,
+    sdUs,
+    decodeUs,
+    dmaUs,
+    stageUs
+  );
+}
+
+// ------------------------------------------------------------
+// Profile text / icon helpers
+// ------------------------------------------------------------
+
+static uint16_t profileWhite(uint8_t amount = 255)
+{
+  return productScale565(
+    productRGB565(235, 237, 224),
+    amount
+  );
+}
+
+static void profileText(
+  const String &value,
+  int x,
+  int y,
+  uint16_t color,
+  const lgfx::IFont *font,
+  textdatum_t datum = textdatum_t::middle_center
+)
+{
+  tft.setTextDatum(datum);
+  tft.setFont(font);
+  tft.setTextColor(color);
+  tft.drawString(value, x, y);
+}
+
+
+static void profileOrbitronText(
+  const String &value,
+  int x,
+  int y,
+  uint16_t color,
+  float scale,
+  textdatum_t datum = textdatum_t::middle_center
+)
+{
+  tft.setTextDatum(datum);
+  tft.setFont(
+    &fonts::Orbitron_Light_24
+  );
+  tft.setTextSize(
+    scale
+  );
+  tft.setTextColor(
+    color
+  );
+
+  tft.drawString(
+    value,
+    x,
+    y
+  );
+
+  // Always restore the global text scale after the scaled Orbitron draw.
+  tft.setTextSize(
+    1.0f
+  );
+}
+
+static void profileMaskClear(
+  uint8_t *mask,
+  size_t bytes
+)
+{
+  memset(mask, 0, bytes);
+}
+
+static inline void profileMaskSet(
+  uint8_t *mask,
+  size_t index
+)
+{
+  mask[index >> 3] |=
+    (uint8_t)(1u << (index & 7));
+}
+
+static inline bool profileMaskGet(
+  const uint8_t *mask,
+  size_t index
+)
+{
+  return (
+    mask[index >> 3] &
+    (uint8_t)(1u << (index & 7))
+  ) != 0;
+}
+
+static bool buildProfileTextMask(
+  const String &value,
+  float scale,
+  int width,
+  int height,
+  uint8_t *mask
+)
+{
+  profileMaskClear(
+    mask,
+    (size_t)((width * height + 7) / 8)
+  );
+
+  LGFX_Sprite sprite(
+    &tft
+  );
+
+  sprite.setColorDepth(8);
+
+  if (!sprite.createSprite(width, height))
+  {
+    Serial.println(
+      "[PROFILE] Static text mask sprite allocation failed."
+    );
+    return false;
+  }
+
+  sprite.fillScreen(0);
+  sprite.setTextDatum(
+    textdatum_t::middle_center
+  );
+  sprite.setFont(
+    &fonts::Orbitron_Light_24
+  );
+  sprite.setTextSize(
+    scale
+  );
+  sprite.setTextColor(
+    255
+  );
+
+  sprite.drawString(
+    value,
+    width / 2,
+    height / 2
+  );
+
+  uint8_t *buffer =
+    static_cast<uint8_t *>(
+      sprite.getBuffer()
+    );
+
+  if (!buffer)
+  {
+    sprite.deleteSprite();
+    Serial.println(
+      "[PROFILE] Static text mask buffer unavailable."
+    );
+    return false;
+  }
+
+  const size_t pixels =
+    (size_t)width * height;
+
+  for (size_t i = 0; i < pixels; ++i)
+  {
+    if (buffer[i] != 0)
+      profileMaskSet(mask, i);
+  }
+
+  sprite.deleteSprite();
+  return true;
+}
+
+static bool prepareProfileOverlayRaster()
+{
+  const String gamerId =
+    liveGamerID.length()
+      ? liveGamerID
+      : (
+          savedGamerID.length()
+            ? savedGamerID
+            : "PLAYER"
+        );
+
+  String displayGamerId =
+    gamerId;
+
+  const float orbitron18 =
+    18.0f / 24.0f;
+
+  tft.setFont(
+    &fonts::Orbitron_Light_24
+  );
+  tft.setTextSize(
+    orbitron18
+  );
+
+  if (tft.textWidth(displayGamerId) > 175)
+  {
+    displayGamerId =
+      displayGamerId.substring(0, 15);
+  }
+
+  profileGamerWidth =
+    tft.textWidth(displayGamerId);
+
+  tft.setTextSize(1.0f);
+
+  const bool gamerOK =
+    buildProfileTextMask(
+      displayGamerId,
+      orbitron18,
+      PROFILE_GAMER_MASK_W,
+      PROFILE_GAMER_MASK_H,
+      profileGamerMask
+    );
+
+  const String score =
+    String(liveGamerScore);
+
+  const bool scoreOK =
+    buildProfileTextMask(
+      score,
+      24.0f / 24.0f,
+      PROFILE_SCORE_MASK_W,
+      PROFILE_SCORE_MASK_H,
+      profileScoreMask
+    );
+
+  if (!gamerOK || !scoreOK)
+  {
+    profileOverlayRasterReady = false;
+    return false;
+  }
+
+  profileGamerMaskX0 =
+    PROFILE_PIC_CENTER_X - (PROFILE_GAMER_MASK_W / 2);
+  profileGamerMaskY0 =
+    97 - (PROFILE_GAMER_MASK_H / 2);
+  profileScoreMaskX0 =
+    PROFILE_PIC_CENTER_X - (PROFILE_SCORE_MASK_W / 2);
+  profileScoreMaskY0 =
+    255 - (PROFILE_SCORE_MASK_H / 2);
+
+  profileOverlayRasterReady = true;
+  return true;
+}
+
+static inline void applyProfileStaticOverlayToRow(
+  uint16_t *rowBuffer,
+  int rowY,
+  int xStart,
+  int count
+)
+{
+  if (!profileOverlayRasterReady || count <= 0)
+    return;
+
+  const uint16_t white =
+    profileWhite(255);
+
+  // GamerTag glyph pixels.
+  if (
+    rowY >= profileGamerMaskY0 &&
+    rowY < profileGamerMaskY0 + PROFILE_GAMER_MASK_H
+  )
+  {
+    const int localY =
+      rowY - profileGamerMaskY0;
+
+    for (int i = 0; i < count; ++i)
+    {
+      const int x = xStart + i;
+      if (
+        x >= profileGamerMaskX0 &&
+        x < profileGamerMaskX0 + PROFILE_GAMER_MASK_W
+      )
+      {
+        const int localX =
+          x - profileGamerMaskX0;
+        const size_t idx =
+          (size_t)localY * PROFILE_GAMER_MASK_W + localX;
+
+        if (profileMaskGet(profileGamerMask, idx))
+          rowBuffer[i] = white;
+      }
+    }
+  }
+
+  // Split live status bar. The bar is represented directly because it is
+  // a solid 2px geometry rather than a font mask.
+  if (
+    rowY >= PROFILE_STATUS_Y &&
+    rowY < PROFILE_STATUS_Y + PROFILE_STATUS_THICKNESS
+  )
+  {
+    const int statusX0 =
+      PROFILE_PIC_CENTER_X - profileGamerWidth / 2;
+
+    const int leftWidth =
+      (profileGamerWidth - PROFILE_STATUS_GAP) / 2;
+
+    const int rightWidth =
+      profileGamerWidth - PROFILE_STATUS_GAP - leftWidth;
+
+    const int rightX =
+      statusX0 + leftWidth + PROFILE_STATUS_GAP;
+
+    const uint16_t lime =
+      profileDirectDMARGB565(154, 245, 42);
+
+    const uint16_t xblColor =
+      (profileBarXblKnown && profileBarXblOnline)
+        ? lime
+        : white;
+
+    const uint16_t wifiColor =
+      profileBarWifiConnected
+        ? lime
+        : white;
+
+    for (int i = 0; i < count; ++i)
+    {
+      const int x =
+        xStart + i;
+
+      if (
+        x >= statusX0 &&
+        x < statusX0 + leftWidth
+      )
+      {
+        rowBuffer[i] = xblColor;
+      }
+      else if (
+        x >= rightX &&
+        x < rightX + rightWidth
+      )
+      {
+        rowBuffer[i] = wifiColor;
+      }
+    }
+  }
+
+  // GamerScore glyph pixels.
+  if (
+    rowY >= profileScoreMaskY0 &&
+    rowY < profileScoreMaskY0 + PROFILE_SCORE_MASK_H &&
+    liveProfileInitialised
+  )
+  {
+    const int localY =
+      rowY - profileScoreMaskY0;
+
+    for (int i = 0; i < count; ++i)
+    {
+      const int x = xStart + i;
+      if (
+        x >= profileScoreMaskX0 &&
+        x < profileScoreMaskX0 + PROFILE_SCORE_MASK_W
+      )
+      {
+        const int localX =
+          x - profileScoreMaskX0;
+        const size_t idx =
+          (size_t)localY * PROFILE_SCORE_MASK_W + localX;
+
+        if (profileMaskGet(profileScoreMask, idx))
+          rowBuffer[i] = white;
+      }
+    }
+  }
+}
+
+static void serviceProfileXblPresence()
+{
+  if (!productProfileActive || !homeWiFiStarted)
+    return;
+
+  if (WiFi.status() != WL_CONNECTED)
+    return;
+
+  if (!liveXUID.length() || !liveXboxPresenceKnown)
+    return;
+
+  const uint32_t now = millis();
+
+  if (
+    now - lastProfilePresenceCheckMs <
+    PROFILE_XBL_PRESENCE_INTERVAL_MS
+  )
+  {
+    return;
+  }
+
+  lastProfilePresenceCheckMs = now;
+
+  WiFiClientSecure presenceClient;
+  presenceClient.setInsecure();
+  presenceClient.setHandshakeTimeout(8);
+
+  HTTPClient presenceHttp;
+  presenceHttp.setConnectTimeout(5000);
+  presenceHttp.setTimeout(7000);
+
+  const String presenceUrl =
+    String("https://xbl.io/api/v2/") + liveXUID + "/presence";
+
+  Serial.print("[API] 5-minute target presence check: ");
+  Serial.println(presenceUrl);
+
+  if (!presenceHttp.begin(presenceClient, presenceUrl))
+  {
+    Serial.println("[API] 5-minute presence HTTP begin failed; keeping last state.");
+    return;
+  }
+
+  presenceHttp.addHeader(
+    "X-Authorization",
+    UPCBADGER_OPENXBL_API_KEY
+  );
+  presenceHttp.addHeader(
+    "Accept",
+    "application/json"
+  );
+
+  const int presenceCode =
+    presenceHttp.GET();
+
+  Serial.print("[API] 5-minute presence HTTP status: ");
+  Serial.println(presenceCode);
+
+  if (presenceCode == HTTP_CODE_OK)
+  {
+    const String presenceBody =
+      presenceHttp.getString();
+
+    String state;
+
+    if (extractJsonString(
+          presenceBody,
+          "state",
+          state
+        ))
+    {
+      const bool online =
+        state.equalsIgnoreCase("Online") ||
+        state.equalsIgnoreCase("OnlinePresence") ||
+        state.indexOf("Online") >= 0;
+
+      if (online != liveXboxOnline)
+      {
+        liveXboxOnline = online;
+
+        Serial.print("[API] 5-minute Xbox Live presence changed: ");
+        Serial.println(
+          liveXboxOnline
+            ? "ONLINE"
+            : "OFFLINE"
+        );
+      }
+      else
+      {
+        Serial.print("[API] 5-minute Xbox Live presence unchanged: ");
+        Serial.println(
+          liveXboxOnline
+            ? "ONLINE"
+            : "OFFLINE"
+        );
+      }
+    }
+    else
+    {
+      Serial.println(
+        "[API] 5-minute presence response contained no state; keeping last state."
+      );
+    }
+  }
+  else if (presenceCode < 0)
+  {
+    Serial.print("[API] 5-minute presence transport error: ");
+    Serial.println(
+      presenceHttp.errorToString(presenceCode)
+    );
+    Serial.println(
+      "[API] Keeping last known Xbox Live presence."
+    );
+  }
+  else
+  {
+    Serial.println(
+      "[API] 5-minute presence request did not return HTTP 200; keeping last state."
+    );
+  }
+
+  presenceHttp.end();
+}
+
+static void serviceProfileStatusBars()
+{
+  if (!productProfileActive)
+    return;
+
+  const uint32_t now = millis();
+
+  if (
+    now - lastProfileStatusRefreshMs <
+    PROFILE_STATUS_REFRESH_INTERVAL_MS
+  )
+  {
+    return;
+  }
+
+  lastProfileStatusRefreshMs = now;
+
+  profileBarWifiConnected =
+    WiFi.status() == WL_CONNECTED;
+
+  profileBarXblKnown =
+    liveXboxPresenceKnown;
+
+  profileBarXblOnline =
+    liveXboxPresenceKnown && liveXboxOnline;
+}
+
+static void drawProfileWifiIcon(
+  bool connected,
+  uint8_t brightness,
+  int cx,
+  int cy
+)
+{
+  const uint16_t c =
+    connected
+      ? profileWhite(brightness)
+      : productScale565(
+          productRGB565(90, 92, 86),
+          brightness
+        );
+
+  for (int band = 0; band < 3; ++band)
+  {
+    const float radius =
+      5.0f + band * 3.0f;
+
+    const float start =
+      -2.45f;
+
+    const float end =
+      -0.70f;
+
+    const int segments =
+      8;
+
+    int px =
+      cx + (int)(cosf(start) * radius);
+
+    int py =
+      cy + (int)(sinf(start) * radius);
+
+    for (int i = 1; i <= segments; ++i)
+    {
+      const float a =
+        start +
+        (end - start) *
+        ((float)i / segments);
+
+      const int nx =
+        cx + (int)(cosf(a) * radius);
+
+      const int ny =
+        cy + (int)(sinf(a) * radius);
+
+      tft.drawLine(
+        px,
+        py,
+        nx,
+        ny,
+        c
+      );
+
+      px = nx;
+      py = ny;
+    }
+  }
+
+  tft.fillCircle(
+    cx,
+    cy + 5,
+    2,
+    c
+  );
+}
+
+static const char *PROFILE_GAMERPIC_FILE = "/upcbadger_gamerpic.png";
+
+static bool downloadLiveGamerPicToSD()
+{
+  badgerDiagCheckpoint(
+    DIAG_GAMERPIC_DOWNLOAD_BEGIN,
+    "GAMERPIC_DOWNLOAD_BEGIN"
+  );
+
+  if (liveGamerPicURL.length() == 0)
+    return false;
+
+  WiFiClientSecure picClient;
+  picClient.setInsecure();
+  HTTPClient picHttp;
+  picClient.setHandshakeTimeout(8);
+  picHttp.setConnectTimeout(5000);
+  picHttp.setTimeout(8000);
+  picHttp.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+
+  Serial.println("[API] Downloading gamerpic to SD cache...");
+
+  Serial.print("[API] Gamerpic URL: ");
+  Serial.println(liveGamerPicURL);
+
+  if (!picHttp.begin(picClient, liveGamerPicURL))
+  {
+    Serial.println("[API] Gamerpic HTTP begin failed.");
+    return false;
+  }
+
+  picHttp.addHeader("Accept", "image/png,image/*");
+  const int code = picHttp.GET();
+  Serial.print("[API] Gamerpic HTTP status: ");
+  Serial.println(code);
+
+  if (code != HTTP_CODE_OK)
+  {
+    picHttp.end();
+    return false;
+  }
+
+  const int total = picHttp.getSize();
+  if (total > 131072)
+  {
+    Serial.println("[API] Gamerpic rejected: larger than 128 KiB.");
+    picHttp.end();
+    return false;
+  }
+
+  SD.remove(PROFILE_GAMERPIC_FILE);
+  File out = SD.open(PROFILE_GAMERPIC_FILE, FILE_WRITE);
+  if (!out)
+  {
+    Serial.println("[API] Gamerpic SD cache open failed.");
+    picHttp.end();
+    return false;
+  }
+
+  WiFiClient *stream = picHttp.getStreamPtr();
+  uint8_t buffer[2048];
+  size_t written = 0;
+  uint32_t lastData = millis();
+
+  while (picHttp.connected() && (total < 0 || written < (size_t)total))
+  {
+    const size_t available = stream->available();
+    if (available == 0)
+    {
+      if (millis() - lastData > 8000UL)
+        break;
+      delay(1);
+      continue;
+    }
+
+    const size_t want = min(available, sizeof(buffer));
+    const int got = stream->readBytes(buffer, want);
+    if (got <= 0)
+      break;
+
+    out.write(buffer, (size_t)got);
+    written += (size_t)got;
+    lastData = millis();
+
+    if (written > 131072UL)
+      break;
+  }
+
+  out.close();
+  picHttp.end();
+
+  if (total >= 0 && written != (size_t)total)
+  {
+    Serial.print("[API] Gamerpic download incomplete: ");
+    Serial.print(written);
+    Serial.print("/");
+    Serial.println(total);
+    SD.remove(PROFILE_GAMERPIC_FILE);
+    return false;
+  }
+
+  if (written == 0)
+  {
+    Serial.println("[API] Gamerpic download empty.");
+    SD.remove(PROFILE_GAMERPIC_FILE);
+    return false;
+  }
+
+  Serial.print("[API] Gamerpic cached: ");
+  Serial.print(written);
+  Serial.println(" bytes.");
+
+  badgerDiagCheckpoint(
+    DIAG_GAMERPIC_DOWNLOAD_DONE,
+    "GAMERPIC_DOWNLOAD_DONE"
+  );
+  return true;
+}
+
+static bool inspectCachedGamerPic()
+{
+  if (!SD.exists(PROFILE_GAMERPIC_FILE))
+  {
+    Serial.println("[PROFILE] No cached gamerpic to inspect.");
+    return false;
+  }
+
+  File pic = SD.open(PROFILE_GAMERPIC_FILE, FILE_READ);
+  if (!pic)
+  {
+    Serial.println("[PROFILE] Failed to open cached gamerpic.");
+    return false;
+  }
+
+  const uint32_t fileSize = (uint32_t)pic.size();
+
+  uint8_t sig[8] = {};
+  const int got = (int)pic.read(sig, sizeof(sig));
+
+  bool isPng =
+    got == 8 &&
+    sig[0] == 0x89 &&
+    sig[1] == 0x50 &&
+    sig[2] == 0x4E &&
+    sig[3] == 0x47 &&
+    sig[4] == 0x0D &&
+    sig[5] == 0x0A &&
+    sig[6] == 0x1A &&
+    sig[7] == 0x0A;
+
+  Serial.print("[PROFILE] Gamerpic file size: ");
+  Serial.println(fileSize);
+
+  if (!isPng)
+  {
+    Serial.println("[PROFILE] Gamerpic is not a PNG.");
+    Serial.print("[PROFILE] Signature:");
+    for (int i = 0; i < got; ++i)
+    {
+      Serial.print(" ");
+      if (sig[i] < 16) Serial.print("0");
+      Serial.print(sig[i], HEX);
+    }
+    Serial.println();
+    pic.close();
+    return false;
+  }
+
+  // PNG IHDR begins at byte 8. Width/height are big-endian at byte 16..23.
+  uint8_t ihdr[25] = {};
+  bool dimensionsOk = false;
+
+  if (pic.seek(0) && pic.read(ihdr, sizeof(ihdr)) == (int)sizeof(ihdr))
+  {
+    const bool ihdrIsPng =
+      ihdr[0] == 0x89 &&
+      ihdr[1] == 0x50 &&
+      ihdr[2] == 0x4E &&
+      ihdr[3] == 0x47 &&
+      ihdr[4] == 0x0D &&
+      ihdr[5] == 0x0A &&
+      ihdr[6] == 0x1A &&
+      ihdr[7] == 0x0A &&
+      ihdr[12] == 'I' &&
+      ihdr[13] == 'H' &&
+      ihdr[14] == 'D' &&
+      ihdr[15] == 'R';
+
+    if (ihdrIsPng)
+    {
+      const uint32_t w =
+        ((uint32_t)ihdr[16] << 24) |
+        ((uint32_t)ihdr[17] << 16) |
+        ((uint32_t)ihdr[18] << 8)  |
+        (uint32_t)ihdr[19];
+
+      const uint32_t h =
+        ((uint32_t)ihdr[20] << 24) |
+        ((uint32_t)ihdr[21] << 16) |
+        ((uint32_t)ihdr[22] << 8)  |
+        (uint32_t)ihdr[23];
+
+      Serial.print("[PROFILE] Gamerpic PNG dimensions: ");
+      Serial.print(w);
+      Serial.print("x");
+      Serial.println(h);
+
+      dimensionsOk = (w > 0 && h > 0);
+    }
+  }
+
+  pic.close();
+  return dimensionsOk;
+}
+
+class GamerPicFileWrapper : public lgfx::DataWrapper
+{
+public:
+  explicit GamerPicFileWrapper(File *file) : _file(file) {}
+  int read(uint8_t *buf, uint32_t len) override { return _file ? (int)_file->read(buf, len) : 0; }
+  void skip(int32_t offset) override
+  {
+    if (!_file) return;
+    const int64_t target = (int64_t)_file->position() + offset;
+    if (target >= 0) _file->seek((uint32_t)target);
+  }
+  bool seek(uint32_t offset) override { return _file && _file->seek(offset); }
+  void close(void) override { /* caller owns Arduino File */ }
+  int32_t tell(void) override { return _file ? (int32_t)_file->position() : 0; }
+private:
+  File *_file;
+};
+
+static inline uint16_t profileBilerpSwap565(
+  uint16_t p00,
+  uint16_t p10,
+  uint16_t p01,
+  uint16_t p11,
+  uint16_t fx,
+  uint16_t fy
+)
+{
+  // LovyanGFX swap565_t (verified against upstream colortype.hpp):
+  //   bits 0..2   = green high 3
+  //   bits 3..7   = red 5
+  //   bits 8..12  = blue 5
+  //   bits 13..15 = green low 3
+
+  const uint16_t r00 =
+    (p00 >> 3) & 0x1F;
+
+  const uint16_t r10 =
+    (p10 >> 3) & 0x1F;
+
+  const uint16_t r01 =
+    (p01 >> 3) & 0x1F;
+
+  const uint16_t r11 =
+    (p11 >> 3) & 0x1F;
+
+  const uint16_t g00 =
+    (uint16_t)(
+      ((p00 & 0x0007u) << 3) |
+      ((p00 >> 13) & 0x0007u)
+    );
+
+  const uint16_t g10 =
+    (uint16_t)(
+      ((p10 & 0x0007u) << 3) |
+      ((p10 >> 13) & 0x0007u)
+    );
+
+  const uint16_t g01 =
+    (uint16_t)(
+      ((p01 & 0x0007u) << 3) |
+      ((p01 >> 13) & 0x0007u)
+    );
+
+  const uint16_t g11 =
+    (uint16_t)(
+      ((p11 & 0x0007u) << 3) |
+      ((p11 >> 13) & 0x0007u)
+    );
+
+  const uint16_t b00 =
+    (p00 >> 8) & 0x1F;
+
+  const uint16_t b10 =
+    (p10 >> 8) & 0x1F;
+
+  const uint16_t b01 =
+    (p01 >> 8) & 0x1F;
+
+  const uint16_t b11 =
+    (p11 >> 8) & 0x1F;
+
+  const uint32_t r0 =
+    (r00 * (256u - fx) +
+     r10 * fx +
+     128u) >> 8;
+
+  const uint32_t r1 =
+    (r01 * (256u - fx) +
+     r11 * fx +
+     128u) >> 8;
+
+  const uint32_t g0 =
+    (g00 * (256u - fx) +
+     g10 * fx +
+     128u) >> 8;
+
+  const uint32_t g1 =
+    (g01 * (256u - fx) +
+     g11 * fx +
+     128u) >> 8;
+
+  const uint32_t b0 =
+    (b00 * (256u - fx) +
+     b10 * fx +
+     128u) >> 8;
+
+  const uint32_t b1 =
+    (b01 * (256u - fx) +
+     b11 * fx +
+     128u) >> 8;
+
+  const uint16_t r =
+    (uint16_t)(
+      (r0 * (256u - fy) +
+       r1 * fy +
+       128u) >> 8
+    );
+
+  const uint16_t g =
+    (uint16_t)(
+      (g0 * (256u - fy) +
+       g1 * fy +
+       128u) >> 8
+    );
+
+  const uint16_t b =
+    (uint16_t)(
+      (b0 * (256u - fy) +
+       b1 * fy +
+       128u) >> 8
+    );
+
+  // Exact bit arrangement of lgfx::swap565(r,g,b), from 5/6/5 components.
+  return (uint16_t)(
+    (r << 3) |
+    (g >> 3) |
+    ((g & 0x0007u) << 13) |
+    (b << 8)
+  );
+}
+
+// ============================================================
+// V2.36 HIGH-QUALITY GAMERPIC PATH
+// ------------------------------------------------------------
+// The known-good 72x72 LovyanGFX decode is retained as the decoder model,
+// but the 72px raster is no longer used. Instead we use LovyanGFX's actual
+// public Pngle API to receive the original 208x208 RGB888 pixels and perform
+// a true area-weighted 208 -> 127 resample one output row at a time.
+//
+// Memory stays small because only two decoded source rows and one output row
+// exist at any time. No 127x127 framebuffer is allocated.
+// ============================================================
+
+// Arduino sketch preprocessor can emit prototypes before it reaches the
+// full context definition. Forward-declare the context and emitter first.
+static void gamerPicEmitReadyRows(void *user_data);
+
+struct GamerPicAreaContext
+{
+  File *file = nullptr;
+
+  int width = 0;
+  int height = 0;
+  bool valid = false;
+  bool interlaced = false;
+
+  int currentY = -1;
+  int maxX = -1;
+  int nextOutputY = 0;
+
+  struct RGB8
+  {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+  };
+
+  // Two source rows are sufficient because 208/127 < 2.
+  RGB8 sourceRows[2][208] = {};
+
+  // One final RGB565 output row.
+  uint16_t outputRow[127] = {};
+};
+
+static uint32_t gamerPicPngRead(
+  void *user_data,
+  uint8_t *buf,
+  uint32_t len
+)
+{
+  GamerPicAreaContext *ctx =
+    static_cast<GamerPicAreaContext *>(user_data);
+
+  if (!ctx || !ctx->file || !len)
+    return 0;
+
+  if (buf)
+  {
+    return (uint32_t)ctx->file->read(
+      buf,
+      len
+    );
+  }
+
+  const uint64_t target =
+    (uint64_t)ctx->file->position() + len;
+
+  if (target > 0xFFFFFFFFULL)
+    return 0;
+
+  return ctx->file->seek(
+    (uint32_t)target
+  )
+    ? len
+    : 0;
+}
+
+static inline uint16_t gamerPicPackCorrectedRGB565(
+  uint8_t r,
+  uint8_t g,
+  uint8_t b
+)
+{
+  // Exact lgfx::swap565-style packing used by the proven v2.07 path.
+  const uint16_t r5 =
+    (uint16_t)(r >> 3);
+
+  const uint16_t g6 =
+    (uint16_t)(g >> 2);
+
+  const uint16_t b5 =
+    (uint16_t)(b >> 3);
+
+  const uint16_t c =
+    (uint16_t)(
+      (r5 << 3) |
+      (g6 >> 3) |
+      ((g6 & 0x0007u) << 13) |
+      (b5 << 8)
+    );
+
+  // Preserve the exact existing gamerpic R/B correction.
+  const uint16_t redToBlue =
+    (uint16_t)((c & 0x00F8u) << 5);
+
+  const uint16_t blueToRed =
+    (uint16_t)((c & 0x1F00u) >> 5);
+
+  return (uint16_t)(
+    (c & 0xE007u) |
+    redToBlue |
+    blueToRed
+  );
+}
+
+static inline uint16_t gamerPicAxisStart(
+  int out,
+  int sourceSize,
+  int outSize
+)
+{
+  return (uint16_t)(
+    ((int64_t)out * sourceSize) /
+    outSize
+  );
+}
+
+static inline uint16_t gamerPicAxisEndExclusive(
+  int out,
+  int sourceSize,
+  int outSize
+)
+{
+  return (uint16_t)(
+    ((int64_t)(out + 1) * sourceSize) /
+    outSize
+  );
+}
+
+static void gamerPicEmitReadyRows(
+  void *user_data
+)
+{
+  GamerPicAreaContext &ctx =
+    *static_cast<GamerPicAreaContext *>(user_data);
+  if (!ctx.valid ||
+      ctx.interlaced ||
+      ctx.currentY < 0)
+  {
+    return;
+  }
+
+  constexpr int OUT = 127;
+  constexpr int SRC = 208;
+  constexpr uint32_t DENOM =
+    (uint32_t)(SRC * SRC);
+
+  while (ctx.nextOutputY < OUT)
+  {
+    const int oy =
+      ctx.nextOutputY;
+
+    const uint32_t yStart =
+      (uint32_t)oy * SRC;
+
+    const uint32_t yEnd =
+      (uint32_t)(oy + 1) * SRC;
+
+    const int y0 =
+      (int)(yStart / OUT);
+
+    const int y1 =
+      (int)((yEnd - 1) / OUT);
+
+    // The output row can be produced once its highest source row exists.
+    if (y1 > ctx.currentY)
+      break;
+
+    const uint16_t wy0 =
+      (uint16_t)(
+        ((uint32_t)(y0 + 1) * OUT > yEnd
+          ? yEnd
+          : (uint32_t)(y0 + 1) * OUT) -
+        yStart
+      );
+
+    const uint16_t wy1 =
+      (y1 == y0)
+        ? 0
+        : (uint16_t)(
+            yEnd -
+            (uint32_t)y1 * OUT
+          );
+
+    const GamerPicAreaContext::RGB8 *row0 =
+      ctx.sourceRows[y0 & 1];
+
+    const GamerPicAreaContext::RGB8 *row1 =
+      (y1 == y0)
+        ? row0
+        : ctx.sourceRows[y1 & 1];
+
+    for (int ox = 0; ox < OUT; ++ox)
+    {
+      const uint32_t xStart =
+        (uint32_t)ox * SRC;
+
+      const uint32_t xEnd =
+        (uint32_t)(ox + 1) * SRC;
+
+      const int x0 =
+        (int)(xStart / OUT);
+
+      const int x1 =
+        (int)((xEnd - 1) / OUT);
+
+      const uint16_t wx0 =
+        (uint16_t)(
+          ((uint32_t)(x0 + 1) * OUT > xEnd
+            ? xEnd
+            : (uint32_t)(x0 + 1) * OUT) -
+          xStart
+        );
+
+      const uint16_t wx1 =
+        (x1 == x0)
+          ? 0
+          : (uint16_t)(
+              xEnd -
+              (uint32_t)x1 * OUT
+            );
+
+      const GamerPicAreaContext::RGB8 &p00 =
+        row0[x0];
+
+      const GamerPicAreaContext::RGB8 &p10 =
+        row0[x1];
+
+      const GamerPicAreaContext::RGB8 &p01 =
+        row1[x0];
+
+      const GamerPicAreaContext::RGB8 &p11 =
+        row1[x1];
+
+      const uint32_t rSum =
+        (uint32_t)p00.r * wx0 * wy0 +
+        (uint32_t)p10.r * wx1 * wy0 +
+        (uint32_t)p01.r * wx0 * wy1 +
+        (uint32_t)p11.r * wx1 * wy1;
+
+      const uint32_t gSum =
+        (uint32_t)p00.g * wx0 * wy0 +
+        (uint32_t)p10.g * wx1 * wy0 +
+        (uint32_t)p01.g * wx0 * wy1 +
+        (uint32_t)p11.g * wx1 * wy1;
+
+      const uint32_t bSum =
+        (uint32_t)p00.b * wx0 * wy0 +
+        (uint32_t)p10.b * wx1 * wy0 +
+        (uint32_t)p01.b * wx0 * wy1 +
+        (uint32_t)p11.b * wx1 * wy1;
+
+      const uint8_t r =
+        (uint8_t)((rSum + DENOM / 2) / DENOM);
+
+      const uint8_t g =
+        (uint8_t)((gSum + DENOM / 2) / DENOM);
+
+      const uint8_t b =
+        (uint8_t)((bSum + DENOM / 2) / DENOM);
+
+      ctx.outputRow[ox] =
+        gamerPicPackCorrectedRGB565(
+          r,
+          g,
+          b
+        );
+    }
+
+    const int rowOy =
+      oy - 63;
+
+    const int remaining =
+      63 * 63 -
+      rowOy * rowOy;
+
+    const int half =
+      (remaining >= 0)
+        ? (int)sqrtf((float)remaining)
+        : 0;
+
+    const int xStart =
+      -half;
+
+    const int rowWidth =
+      half * 2 + 1;
+
+    if (rowWidth > 0)
+    {
+      tft.setAddrWindow(
+        PROFILE_PIC_CENTER_X + xStart,
+        PROFILE_PIC_CENTER_Y + rowOy,
+        rowWidth,
+        1
+      );
+
+      tft.writePixels(
+        ctx.outputRow + (63 - half),
+        rowWidth,
+        false
+      );
+    }
+
+    ++ctx.nextOutputY;
+  }
+}
+
+static void gamerPicPngDraw(
+  void *user_data,
+  uint32_t x,
+  uint32_t y,
+  uint_fast8_t div_x,
+  size_t len,
+  const uint8_t *argb
+)
+{
+  GamerPicAreaContext *ctx =
+    static_cast<GamerPicAreaContext *>(user_data);
+
+  if (!ctx ||
+      !ctx->valid ||
+      ctx->interlaced ||
+      y >= (uint32_t)ctx->height ||
+      x >= (uint32_t)ctx->width ||
+      !argb)
+  {
+    return;
+  }
+
+  if ((int)y != ctx->currentY)
+  {
+    ctx->currentY = (int)y;
+    ctx->maxX = -1;
+    memset(
+      ctx->sourceRows[y & 1],
+      0,
+      sizeof(ctx->sourceRows[y & 1])
+    );
+  }
+
+  uint32_t px = x;
+
+  for (size_t i = 0; i < len; ++i)
+  {
+    if (px >= (uint32_t)ctx->width)
+      break;
+
+    const uint8_t alpha =
+      argb[0];
+
+    GamerPicAreaContext::RGB8 *dst =
+      &ctx->sourceRows[y & 1][px];
+
+    if (alpha == 0)
+    {
+      dst->r = 0;
+      dst->g = 0;
+      dst->b = 0;
+    }
+    else if (alpha == 255)
+    {
+      dst->r = argb[1];
+      dst->g = argb[2];
+      dst->b = argb[3];
+    }
+    else
+    {
+      // Match the proven sprite path's black-cleared destination semantics.
+      dst->r = (uint8_t)(((uint16_t)argb[1] * alpha + 127) / 255);
+      dst->g = (uint8_t)(((uint16_t)argb[2] * alpha + 127) / 255);
+      dst->b = (uint8_t)(((uint16_t)argb[3] * alpha + 127) / 255);
+    }
+
+    ctx->maxX =
+      max(
+        ctx->maxX,
+        (int)px
+      );
+
+    px += div_x;
+    argb += 4;
+  }
+
+  if (ctx->maxX >= ctx->width - 1)
+    gamerPicEmitReadyRows(ctx);
+}
+
+static bool drawCachedGamerPic()
+{
+  if (!SD.exists(PROFILE_GAMERPIC_FILE))
+  {
+    Serial.println("[PROFILE] No cached gamerpic to draw.");
+    return false;
+  }
+
+  File pic =
+    SD.open(
+      PROFILE_GAMERPIC_FILE,
+      FILE_READ
+    );
+
+  if (!pic)
+  {
+    Serial.println("[PROFILE] Failed to open cached gamerpic.");
+    return false;
+  }
+
+  const uint32_t fileSize =
+    (uint32_t)pic.size();
+
+  Serial.print("[PROFILE] Gamerpic file size: ");
+  Serial.println(fileSize);
+
+  GamerPicAreaContext ctx;
+  ctx.file = &pic;
+  ctx.valid = false;
+  ctx.interlaced = false;
+  ctx.currentY = -1;
+  ctx.maxX = -1;
+  ctx.nextOutputY = 0;
+
+  pngle_t *pngle =
+    lgfx_pngle_new();
+
+  if (!pngle)
+  {
+    Serial.println("[PROFILE] Gamerpic Pngle allocation failed.");
+    pic.close();
+    return false;
+  }
+
+  if (!pic.seek(0))
+  {
+    Serial.println("[PROFILE] Gamerpic seek(0) failed.");
+    lgfx_pngle_destroy(pngle);
+    pic.close();
+    return false;
+  }
+
+  if (lgfx_pngle_prepare(
+        pngle,
+        gamerPicPngRead,
+        &ctx
+      ) < 0)
+  {
+    Serial.println("[PROFILE] Gamerpic Pngle prepare failed.");
+    lgfx_pngle_destroy(pngle);
+    pic.close();
+    return false;
+  }
+
+  ctx.width =
+    (int)lgfx_pngle_get_width(pngle);
+
+  ctx.height =
+    (int)lgfx_pngle_get_height(pngle);
+
+  pngle_ihdr_t *ihdr =
+    lgfx_pngle_get_ihdr(pngle);
+
+  if (ihdr)
+    ctx.interlaced =
+      ihdr->interlace != 0;
+
+  Serial.print("[PROFILE] Gamerpic PNG dimensions: ");
+  Serial.print(ctx.width);
+  Serial.print("x");
+  Serial.println(ctx.height);
+
+  if (ctx.width != 208 ||
+      ctx.height != 208 ||
+      ctx.interlaced)
+  {
+    Serial.println(
+      "[PROFILE] Gamerpic area path requires non-interlaced 208x208 PNG."
+    );
+    lgfx_pngle_destroy(pngle);
+    pic.close();
+    return false;
+  }
+
+  ctx.valid = true;
+
+  tft.startWrite();
+
+  const int decodeResult =
+    lgfx_pngle_decomp(
+      pngle,
+      gamerPicPngDraw
+    );
+
+  tft.endWrite();
+
+  const bool decoded =
+    decodeResult >= 0 &&
+    ctx.nextOutputY == 127;
+
+  lgfx_pngle_destroy(pngle);
+  pic.close();
+
+  if (!decoded)
+  {
+    Serial.print("[PROFILE] Gamerpic area decode failed. result=");
+    Serial.print(decodeResult);
+    Serial.print(" outputRows=");
+    Serial.println(ctx.nextOutputY);
+    return false;
+  }
+
+  Serial.println(
+    "[PROFILE] Gamerpic 208x208 -> 127px area-resampled circle."
+  );
+
+  return true;
+}
+
+
+
+static void drawProfileSpacedLabel(
+  const String &value,
+  int cx,
+  int y,
+  uint16_t color,
+  const lgfx::IFont *font,
+  int spacing
+)
+{
+  if (value.length() == 0)
+    return;
+
+  tft.setFont(
+    font
+  );
+
+  tft.setTextDatum(
+    textdatum_t::top_left
+  );
+
+  tft.setTextColor(
+    color
+  );
+
+  int totalWidth = 0;
+
+  for (size_t i = 0; i < value.length(); ++i)
+  {
+    const String ch =
+      value.substring(
+        i,
+        i + 1
+      );
+
+    totalWidth +=
+      tft.textWidth(ch);
+
+    if (i + 1 < value.length())
+      totalWidth += spacing;
+  }
+
+  int x =
+    cx -
+    totalWidth / 2;
+
+  for (size_t i = 0; i < value.length(); ++i)
+  {
+    const String ch =
+      value.substring(
+        i,
+        i + 1
+      );
+
+    tft.drawString(
+      ch,
+      x,
+      y
+    );
+
+    x +=
+      tft.textWidth(ch);
+
+    if (i + 1 < value.length())
+      x += spacing;
+  }
+}
+
+static void drawXboxGlyph(
+  int cx,
+  int cy,
+  uint16_t color
+)
+{
+  // Target-inspired premium Xbox orb:
+  // subtle lime edge -> white sphere -> clean dark mark.
+  const uint16_t lime =
+    productRGB565(
+      120,
+      255,
+      40
+    );
+
+  const uint16_t limeSoft =
+    productScale565(
+      lime,
+      115
+    );
+
+  tft.fillCircle(
+    cx,
+    cy,
+    12,
+    limeSoft
+  );
+
+  tft.fillCircle(
+    cx,
+    cy,
+    10,
+    color
+  );
+
+  // Rounded 2px black X strokes.
+  const uint16_t cut =
+    TFT_BLACK;
+
+  tft.drawLine(
+    cx - 6,
+    cy - 6,
+    cx + 6,
+    cy + 5,
+    cut
+  );
+
+  tft.drawLine(
+    cx + 6,
+    cy - 6,
+    cx - 6,
+    cy + 5,
+    cut
+  );
+
+  // Thicken the upper arms and centre slightly without making
+  // the mark look like a crude oversized X.
+  tft.drawLine(
+    cx - 5,
+    cy - 6,
+    cx,
+    cy - 1,
+    cut
+  );
+
+  tft.drawLine(
+    cx + 5,
+    cy - 6,
+    cx,
+    cy - 1,
+    cut
+  );
+
+  tft.fillCircle(
+    cx,
+    cy,
+    2,
+    cut
+  );
+}
+
+static void drawProfileOverlay(
+  uint8_t brightness,
+  bool drawPic = false
+)
+{
+  // Rebuild the static compositor whenever this full overlay is deliberately
+  // committed (initial screen or a live-profile value change).
+  prepareProfileOverlayRaster();
+
+  const int cx =
+    PROFILE_PIC_CENTER_X;
+
+  const uint16_t white =
+    profileWhite(
+      brightness
+    );
+
+  const uint16_t limeGreen =
+    productRGB565(
+      154,
+      245,
+      42
+    );
+
+  const String gamerId =
+    liveGamerID.length()
+      ? liveGamerID
+      : (
+          savedGamerID.length()
+            ? savedGamerID
+            : "PLAYER"
+        );
+
+  // ----------------------------------------------------------
+  // GAMERTAG — Orbitron ~18px
+  // ----------------------------------------------------------
+  String displayGamerId =
+    gamerId;
+
+  const float orbitron18 =
+    18.0f / 24.0f;
+
+  tft.setFont(
+    &fonts::Orbitron_Light_24
+  );
+
+  tft.setTextSize(
+    orbitron18
+  );
+
+  // Measure and clip using the actual Orbitron scale that will be rendered.
+  if (
+    tft.textWidth(
+      displayGamerId
+    ) > 175
+  )
+  {
+    displayGamerId =
+      displayGamerId.substring(
+        0,
+        15
+      );
+  }
+
+  const int gamerWidth =
+    tft.textWidth(
+      displayGamerId
+    );
+
+  tft.setTextSize(
+    1.0f
+  );
+
+  profileOrbitronText(
+    displayGamerId,
+    cx,
+    97,
+    white,
+    orbitron18
+  );
+
+  // ----------------------------------------------------------
+  // LIVE STATUS BAR — exact GamerTag width
+  //
+  // LEFT  = Xbox Live presence
+  // RIGHT = home Wi-Fi connection
+  // The small centre gap deliberately separates the two signals.
+  // ----------------------------------------------------------
+  const int statusY =
+    109;
+
+  const int statusThickness =
+    2;
+
+  const int statusGap =
+    6;
+
+  const int statusX0 =
+    cx - gamerWidth / 2;
+
+  const int statusWidth =
+    gamerWidth;
+
+  const int leftWidth =
+    (statusWidth - statusGap) / 2;
+
+  const int rightWidth =
+    statusWidth - statusGap - leftWidth;
+
+  const int rightX =
+    statusX0 + leftWidth + statusGap;
+
+  const uint16_t xblStatusColor =
+    (profileBarXblKnown && profileBarXblOnline)
+      ? limeGreen
+      : white;
+
+  const uint16_t wifiStatusColor =
+    profileBarWifiConnected
+      ? limeGreen
+      : white;
+
+  if (leftWidth > 0)
+  {
+    for (int dy = 0; dy < statusThickness; ++dy)
+    {
+      tft.drawFastHLine(
+        statusX0,
+        statusY + dy,
+        leftWidth,
+        xblStatusColor
+      );
+    }
+  }
+
+  if (rightWidth > 0)
+  {
+    for (int dy = 0; dy < statusThickness; ++dy)
+    {
+      tft.drawFastHLine(
+        rightX,
+        statusY + dy,
+        rightWidth,
+        wifiStatusColor
+      );
+    }
+  }
+
+  // ----------------------------------------------------------
+  // CENTRE — actual XBL gamerpic
+  // ----------------------------------------------------------
+  if (drawPic)
+  {
+    inspectCachedGamerPic();
+    drawCachedGamerPic();
+  }
+
+  // ----------------------------------------------------------
+  // SCORE — Orbitron 24px, no orb
+  // ----------------------------------------------------------
+  if (liveProfileInitialised)
+  {
+    profileOrbitronText(
+      String(liveGamerScore),
+      cx,
+      255,
+      white,
+      24.0f / 24.0f
+    );
+  }
+}
+
+static void refreshProfileFrameAndOverlay(uint8_t brightness)
+{
+  if (!productProfileActive || !profileAnimReady)
+    return;
+
+  // A profile value changed: rebuild the tiny static text masks once, then
+  // let the normal animation compositor carry those exact pixels forward.
+  if (!prepareProfileOverlayRaster())
+    return;
+
+  profileBarXblKnown =
+    liveXboxPresenceKnown;
+  profileBarXblOnline =
+    liveXboxPresenceKnown && liveXboxOnline;
+
+  // One clean current-frame commit is enough to replace stale text. The
+  // animation writer now composites the same static pixels on every frame.
+  if (!renderProfileAnimationFrame(profileAnimFrame, PROFILE_PROTECT_PIC))
+    return;
+
+  profileProtectMask = PROFILE_PROTECT_PIC;
+
+  (void)brightness;
+}
+
+static void refreshProfileRegion(uint32_t changedBit, uint8_t brightness)
+{
+  if (!productProfileActive || !profileAnimReady) return;
+
+  // V2.23: changedBit is retained for caller compatibility, but text/status
+  // fields are never animation-protected. Only the gamerpic remains protected.
+  (void)changedBit;
+
+  if (renderProfileAnimationFrame(profileAnimFrame, PROFILE_PROTECT_PIC))
+    drawProfileOverlay(brightness, false);
+}
+
+static bool drawProfileScreen(uint8_t brightness)
+{
+  profileAnimFrame = MASTER_LOOP_START_FRAME;
+
+  profileBarWifiConnected =
+    false;
+  profileBarXblKnown =
+    liveXboxPresenceKnown;
+  profileBarXblOnline =
+    liveXboxPresenceKnown && liveXboxOnline;
+  lastProfileStatusRefreshMs = millis();
+
+  if (!prepareProfileOverlayRaster())
+  {
+    tft.fillScreen(TFT_BLACK);
+    profileText("PROFILE OVERLAY ERROR", 180, 170, profileWhite(brightness), &fonts::Font0);
+    return false;
+  }
+
+  if (!renderProfileAnimationFrame(profileAnimFrame, PROFILE_PROTECT_PIC))
+  {
+    tft.fillScreen(TFT_BLACK);
+    profileText("PROFILE ANIMATION ERROR", 180, 170, profileWhite(brightness), &fonts::Font0);
+    return false;
+  }
+  drawProfileOverlay(brightness, true);
+  lastProfileWifiRefreshMs = millis();
+  profileGamerOverlayDirty = false;
+  profileWifiOverlayDirty = false;
+  profileAnimFrame = MASTER_LOOP_START_FRAME + 1UL;
+  if (profileAnimFrame >= MASTER_LOOP_END_FRAME) profileAnimFrame = MASTER_LOOP_START_FRAME;
+  profileAnimNextUs = micros() + PROFILE_ANIM_FRAME_INTERVAL_US;
+  return true;
+}
+
+static void serviceProfileAnimation()
+{
+  if (!productProfileActive || !profileAnimReady)
+    return;
+
+  uint32_t now = micros();
+
+  if ((int32_t)(now - profileAnimNextUs) < 0)
+    return;
+
+  const uint32_t frameCount =
+    profileAnimHeader.frameCount;
+
+  if (frameCount == 0)
+    return;
+
+  uint32_t frame = profileAnimFrame;
+  if (frame < MASTER_LOOP_START_FRAME || frame >= MASTER_LOOP_END_FRAME)
+    frame = MASTER_LOOP_START_FRAME;
+
+  if (!renderProfileAnimationFrame(frame, PROFILE_PROTECT_PIC))
+  {
+    Serial.println(
+      "[PROFILE] Full-screen animation frame update failed."
+    );
+    profileAnimNextUs =
+      now + PROFILE_ANIM_FRAME_INTERVAL_US;
+    return;
+  }
+
+  // V2.25: no separate profile draw occurs here. Static GamerTag,
+  // GamerScore and status pixels are composited directly into the outgoing
+  // animation rows by playProfileFramePipelined().
+  profileProtectMask = PROFILE_PROTECT_PIC;
+
+  frame++;
+  if (frame >= MASTER_LOOP_END_FRAME)
+    frame = MASTER_LOOP_START_FRAME;
+  profileAnimFrame = frame;
+
+  // Keep cadence tied to the prior deadline. If this frame overruns,
+  // the next frame is already due and must not inherit another full
+  // 83.333 ms wait. This specifically prevents a pause at frame 96 -> 0.
+  uint32_t next =
+    profileAnimNextUs + PROFILE_ANIM_FRAME_INTERVAL_US;
+
+  if ((int32_t)(next - now) <= 0)
+    next = now;
+
+  profileAnimNextUs = next;
+}
+
+// ------------------------------------------------------------
+// Theme-neutral setup screen
+// ------------------------------------------------------------
+
+static void drawSetupScreen()
+{
+  tft.fillScreen(TFT_BLACK);
+
+  const int cx = 180;
+
+  tft.setTextDatum(
+    textdatum_t::middle_center
+  );
+
+  tft.setFont(
+    &fonts::Font0
+  );
+
+  tft.setTextSize(2);
+
+  // Keep the physical setup screen calm and simple.
+  tft.setTextColor(
+    TFT_WHITE,
+    TFT_BLACK
+  );
+
+  tft.drawString(
+    "ConsoleBadger Setup",
+    cx,
+    95
+  );
+
+  tft.drawString(
+    "Find ConsoleBadger Wifi and",
+    cx,
+    150
+  );
+
+  tft.drawString(
+    "connect using your phone",
+    cx,
+    195
+  );
+
+  tft.drawString(
+    "(Turn OFF mobile data)",
+    cx,
+    255
+  );
+
+  tft.setTextSize(1);
+}
+
+// ------------------------------------------------------------
+// Browser setup UI
+// ------------------------------------------------------------
+
+static const char SETUP_HTML[] PROGMEM = R"HTML(
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ConsoleBadger Setup</title>
+<style>
+body{margin:0;background:#000;color:#fff;font-family:Arial,sans-serif}
+.wrap{max-width:430px;margin:auto;padding:20px}
+.card{background:#111;border:1px solid #fff;border-radius:18px;padding:22px}
+h1{margin:0;color:#fff;font-size:30px}
+p,label{color:#fff}
+label{display:block;margin-top:16px;font-size:14px}
+input,select{
+ box-sizing:border-box;width:100%;padding:14px;margin-top:7px;
+ border-radius:10px;border:1px solid #fff;background:#000;color:#fff;font-size:16px
+}
+button{
+ width:100%;padding:14px;margin-top:18px;border:1px solid #fff;
+ border-radius:10px;background:#fff;color:#000;font-weight:bold;font-size:16px
+}
+button.secondary{background:#000;color:#fff}
+#networks{margin-top:12px}
+.net{
+ padding:12px;border:1px solid #fff;border-radius:10px;
+ margin-top:8px;background:#000;cursor:pointer
+}
+.net b{color:#fff}
+.meta,.status,.small,.mode-note{color:#bbb;font-size:12px}
+.status{min-height:18px;margin-top:10px}
+.small{margin-top:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="card">
+
+<h1>ConsoleBadger</h1>
+<p>Configure your badge.</p>
+
+<label>Console mode
+<select name="mode" form="setupForm">
+<option value="0">Xbox</option>
+<option value="1" disabled>PlayStation (coming later)</option>
+<option value="2" disabled>Nintendo (coming later)</option>
+</select>
+</label>
+
+<button class="secondary" type="button" onclick="scanWiFi()">
+SCAN FOR WI-FI NETWORKS
+</button>
+
+<div id="status" class="status">
+Tap scan to find nearby networks.
+</div>
+
+<div id="networks"></div>
+
+<form id="setupForm" method="POST" action="/save">
+
+<label>Wi-Fi network
+<input id="ssid" name="ssid" maxlength="64" autocomplete="off" required>
+</label>
+
+<label>Wi-Fi password
+<input name="password" type="password" maxlength="64" autocomplete="off">
+</label>
+
+<label>Gamer ID
+<input name="gamertag" maxlength="32" autocomplete="off" required>
+</label>
+
+<button>SAVE &amp; CONNECT</button>
+
+</form>
+
+<div class="small">
+Choose Xbox for this prototype, select your Wi-Fi, then enter the password and Gamer ID.
+</div>
+
+</div>
+</div>
+
+<script>
+async function scanWiFi(){
+ const status=document.getElementById('status');
+ const list=document.getElementById('networks');
+
+ status.textContent='Scanning nearby Wi-Fi...';
+ list.innerHTML='';
+
+ try{
+  const r=await fetch('/scan');
+  if(!r.ok) throw new Error('scan failed');
+
+  const nets=await r.json();
+
+  if(!nets.length){
+   status.textContent='No networks found. Enter the Wi-Fi name manually.';
+   return;
+  }
+
+  status.textContent=nets.length+' network'+(nets.length===1?'':'s')+' found. Tap yours.';
+
+  nets.forEach(n=>{
+   const row=document.createElement('div');
+   row.className='net';
+
+   const name=document.createElement('b');
+   name.textContent=n.ssid;
+
+   const meta=document.createElement('div');
+   meta.className='meta';
+   meta.textContent=n.rssi+' dBm · '+(n.secure?'Secured':'Open');
+
+   row.appendChild(name);
+   row.appendChild(meta);
+
+   row.onclick=()=>{
+    document.getElementById('ssid').value=n.ssid;
+    status.textContent='Selected '+n.ssid;
+    document.getElementById('ssid').scrollIntoView({
+      behavior:'smooth',
+      block:'center'
+    });
+   };
+
+   list.appendChild(row);
+  });
+ }
+ catch(e){
+  status.textContent='Scan failed. Enter the Wi-Fi name manually.';
+ }
+}
+</script>
+
+</body>
+</html>
+)HTML";
+
+// ------------------------------------------------------------
+// Browser handlers
+// ------------------------------------------------------------
+
+static String jsonEscape(
+  const String &value
+)
+{
+  String out;
+  out.reserve(value.length() + 8);
+
+  for (
+    size_t i = 0;
+    i < value.length();
+    ++i
+  )
+  {
+    char c = value[i];
+
+    if (c == '\\' || c == '"')
+    {
+      out += '\\';
+      out += c;
+    }
+    else if (c == '\n' || c == '\r')
+    {
+      out += ' ';
+    }
+    else
+    {
+      out += c;
+    }
+  }
+
+  return out;
+}
+
+static void handleSetupRoot()
+{
+  Serial.println(
+    "[AP] HTTP GET /"
+  );
+
+  setupServer.send(
+    200,
+    "text/html",
+    SETUP_HTML
+  );
+}
+
+static void handleSetupScan()
+{
+  Serial.println(
+    "[SCAN] Starting Wi-Fi scan..."
+  );
+
+  // Keep the setup AP alive while scanning.
+  WiFi.mode(WIFI_AP_STA);
+
+  int16_t count =
+    WiFi.scanNetworks(
+      false,
+      false
+    );
+
+  Serial.print(
+    "[SCAN] Networks found: "
+  );
+
+  Serial.println(
+    count
+  );
+
+  if (count < 0)
+  {
+    WiFi.scanDelete();
+
+    setupServer.send(
+      500,
+      "application/json",
+      "[]"
+    );
+
+    Serial.println(
+      "[SCAN] Scan failed."
+    );
+
+    return;
+  }
+
+  String json = "[";
+  bool first = true;
+
+  for (int i = 0; i < count; ++i)
+  {
+    String ssid = WiFi.SSID(i);
+
+    if (ssid.length() == 0)
+      continue;
+
+    if (!first)
+      json += ",";
+
+    first = false;
+
+    bool secure =
+      WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+
+    json += "{\"ssid\":\"";
+    json += jsonEscape(ssid);
+    json += "\",\"rssi\":";
+    json += String(WiFi.RSSI(i));
+    json += ",\"secure\":";
+    json += secure
+      ? "true"
+      : "false";
+    json += "}";
+  }
+
+  json += "]";
+
+  setupServer.send(
+    200,
+    "application/json",
+    json
+  );
+
+  WiFi.scanDelete();
+
+  Serial.println(
+    "[SCAN] Results sent to browser."
+  );
+}
+
+static void handleSetupSave()
+{
+  Serial.println(
+    "[AP] HTTP POST /save"
+  );
+
+  String ssid =
+    setupServer.arg("ssid");
+
+  String pass =
+    setupServer.arg("password");
+
+  String gt =
+    setupServer.arg("gamertag");
+
+  String mode =
+    setupServer.arg("mode");
+
+  ssid.trim();
+  gt.trim();
+
+  int selectedMode =
+    mode.toInt();
+
+  // Only Xbox has a real animation asset in this build.
+  selectedMode = MODE_XBOX;
+
+  if (
+    ssid.isEmpty() ||
+    gt.isEmpty()
+  )
+  {
+    setupServer.send(
+      400,
+      "text/plain",
+      "Wi-Fi network and Gamer ID are required."
+    );
+
+    return;
+  }
+
+  Serial.print(
+    "[SETUP] Saving Wi-Fi SSID: "
+  );
+
+  Serial.println(
+    ssid
+  );
+
+  Serial.print(
+    "[SETUP] Saving Gamer ID: "
+  );
+
+  Serial.println(
+    gt
+  );
+
+  setupPrefs.begin(
+    "upcbadger",
+    false
+  );
+
+  setupPrefs.putString(
+    "ssid",
+    ssid
+  );
+
+  setupPrefs.putString(
+    "pass",
+    pass
+  );
+
+  setupPrefs.putString(
+    "gt",
+    gt
+  );
+
+  setupPrefs.putUChar(
+    "mode",
+    (uint8_t)selectedMode
+  );
+
+  setupPrefs.end();
+
+  Serial.println(
+    "[SETUP] NVS save complete."
+  );
+
+  setupServer.send(
+    200,
+    "text/html",
+    "<html><body style='font-family:Arial;background:#000;color:#fff;text-align:center;padding:40px'><h1>Saved.</h1><p>Connecting ConsoleBadger to your Wi-Fi...</p></body></html>"
+  );
+
+  delay(900);
+  ESP.restart();
+}
+
+// ------------------------------------------------------------
+// Load / connect
+// ------------------------------------------------------------
+
+static bool loadProductSettings()
+{
+  setupPrefs.begin(
+    "upcbadger",
+    true
+  );
+
+  savedSSID =
+    setupPrefs.getString(
+      "ssid",
+      ""
+    );
+
+  savedPassword =
+    setupPrefs.getString(
+      "pass",
+      ""
+    );
+
+  savedGamerID =
+    setupPrefs.getString(
+      "gt",
+      ""
+    );
+
+  uint8_t savedMode =
+    setupPrefs.getUChar(
+      "mode",
+      MODE_XBOX
+    );
+
+  setupPrefs.end();
+
+  if (savedMode > MODE_NINTENDO)
+    savedMode = MODE_XBOX;
+
+  consoleMode =
+    (ConsoleMode)savedMode;
+
+  // PS/Nintendo assets are not ready yet.
+  if (consoleMode != MODE_XBOX)
+  {
+    Serial.println(
+      "[SETUP] Non-Xbox mode requested; using Xbox asset for V1."
+    );
+
+    consoleMode = MODE_XBOX;
+  }
+
+  return (
+    savedSSID.length() > 0 &&
+    savedGamerID.length() > 0
+  );
+}
+
+static bool connectHomeWiFi()
+{
+  Serial.println();
+  Serial.println(
+    "[WIFI] Connecting to saved network..."
+  );
+
+  WiFi.mode(WIFI_STA);
+
+  WiFi.setHostname(
+    "consolebadger"
+  );
+
+  WiFi.begin(
+    savedSSID.c_str(),
+    savedPassword.c_str()
+  );
+
+  tft.fillScreen(
+    TFT_BLACK
+  );
+
+  productText(
+    "CONNECTING WI-FI",
+    180,
+    150,
+    TFT_WHITE,
+    &fonts::Font2
+  );
+
+  uint32_t start =
+    millis();
+
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    millis() - start < 20000UL
+  )
+  {
+    delay(100);
+  }
+
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println(
+      "[WIFI] Connection FAILED."
+    );
+
+    return false;
+  }
+
+  Serial.println(
+    "[WIFI] CONNECTED."
+  );
+
+  Serial.print(
+    "[WIFI] IP: "
+  );
+
+  Serial.println(
+    WiFi.localIP()
+  );
+
+  return true;
+}
+
+// ------------------------------------------------------------
+// Animation storage / Xbox animation
+// ------------------------------------------------------------
+
+static bool initAnimationStorage()
+{
+  Serial.println(
+    "[SD] Starting HSPI..."
+  );
+
+  // Explicitly deselect both SPI devices before SD initialisation.
+  pinMode(TFT_CS, OUTPUT);
+  digitalWrite(TFT_CS, HIGH);
+
+  pinMode(SD_CS, OUTPUT);
+  digitalWrite(SD_CS, HIGH);
+
+  Serial.println("[SD] TFT CS HIGH");
+  Serial.println("[SD] SD CS HIGH");
+
+  Serial.print("[SD] Heap before init: ");
+  Serial.println(ESP.getFreeHeap());
+
+  Serial.print("[MEM] Largest free block before SD init: ");
+  Serial.println(ESP.getMaxAllocHeap());
+
+  sdSPI.begin(
+    SD_SCLK,
+    SD_MISO,
+    SD_MOSI,
+    SD_CS
+  );
+
+  if (!SD.begin(
+        SD_CS,
+        sdSPI,
+        SD_SPI_HZ
+      ))
+  {
+    Serial.println(
+      "[SD] ERROR: SD init failed."
+    );
+
+    Serial.print("[SD] Heap after failed init: ");
+    Serial.println(ESP.getFreeHeap());
+
+    return false;
+  }
+
+  Serial.println("[SD] SD.begin() OK");
+
+  File file =
+    SD.open(
+      CBP_FILE,
+      FILE_READ
+    );
+
+  if (!file)
+  {
+    Serial.println(
+      "[SD] ERROR: Xbox CBP asset not found."
+    );
+
+    return false;
+  }
+
+  bool ok =
+    loadCBPIndex(file);
+
+  file.close();
+
+  Serial.println(
+    ok
+      ? "[SD] Xbox CBP index loaded."
+      : "[SD] ERROR: Xbox CBP index invalid."
+  );
+
+  Serial.print("[MEM] Heap after SD+index: ");
+  Serial.println(ESP.getFreeHeap());
+
+  Serial.print("[MEM] Largest free block after SD+index: ");
+  Serial.println(ESP.getMaxAllocHeap());
+
+  return ok;
+}
+
+static bool playXboxAnimation()
+{
+  File file =
+    SD.open(
+      CBP_FILE,
+      FILE_READ
+    );
+
+  if (!file)
+  {
+    Serial.println(
+      "[PLAYBACK] ERROR: CBP open failed."
+    );
+
+    return false;
+  }
+
+  Serial.println();
+  Serial.println(
+    "=========================================="
+  );
+
+  Serial.println(
+    " XBOX BOOT ANIMATION START"
+  );
+
+  Serial.println(
+    "=========================================="
+  );
+
+  for (
+    uint32_t frame = 0;
+    frame < MASTER_BOOT_END_FRAME && frame < cbpHeader.frameCount;
+    ++frame
+  )
+  {
+    // Restore the proven frame positioning used by the working
+    // standalone player and other Library playback code.
+    file.seek(indexTable[frame].offset);
+
+    uint32_t frameUs = 0;
+    uint32_t sdUs = 0;
+    uint32_t decodeUs = 0;
+    uint32_t dmaUs = 0;
+    uint32_t stageUs = 0;
+
+    if (!playFramePipelined(
+          file,
+          frame,
+          frameUs,
+          sdUs,
+          decodeUs,
+          dmaUs,
+          stageUs
+        ))
+    {
+      Serial.print(
+        "[PLAYBACK] ERROR at frame "
+      );
+
+      Serial.println(
+        frame
+      );
+
+      file.close();
+
+      return false;
+    }
+  }
+
+  file.close();
+
+  Serial.println(
+    "[PLAYBACK] Master boot section complete."
+  );
+
+  return true;
+}
+
+// ------------------------------------------------------------
+// Factory reset / rear button
+// ------------------------------------------------------------
+
+static void factoryResetAndSetup()
+{
+  Serial.println(
+    "[SETUP] FACTORY RESET REQUESTED"
+  );
+
+  setupPrefs.begin(
+    "upcbadger",
+    false
+  );
+
+  setupPrefs.clear();
+  setupPrefs.end();
+
+  savedSSID = "";
+  savedPassword = "";
+  savedGamerID = "";
+
+  tft.fillScreen(
+    TFT_BLACK
+  );
+
+  productText(
+    "FACTORY RESET",
+    180,
+    150,
+    TFT_WHITE,
+    &fonts::Font2
+  );
+
+  productText(
+    "STARTING SETUP",
+    180,
+    195,
+    TFT_WHITE,
+    &fonts::Font0
+  );
+
+  delay(1200);
+
+  startConfigMode(false);
+}
+
+static void checkConfigButton()
+{
+  bool down =
+    digitalRead(
+      CONFIG_BUTTON_PIN
+    ) == LOW;
+
+  if (down)
+  {
+    if (!configButtonLatched)
+    {
+      configButtonLatched = true;
+      configButtonDownMs = millis();
+    }
+
+    return;
+  }
+
+  if (!configButtonLatched)
+    return;
+
+  uint32_t held =
+    millis() -
+    configButtonDownMs;
+
+  configButtonLatched = false;
+  configButtonDownMs = 0;
+
+  if (held >= FACTORY_RESET_HOLD_MS)
+  {
+    factoryResetAndSetup();
+    return;
+  }
+
+  if (held >= CONFIG_HOLD_MS)
+  {
+    startConfigMode(false);
+  }
+}
+
+// ------------------------------------------------------------
+// Config-mode startup
+// ------------------------------------------------------------
+
+static void startConfigMode(bool preserveDisplay)
+{
+  configMode = true;
+  preserveSetupDisplay = preserveDisplay;
+
+  Serial.println();
+  Serial.println(
+    "=========================================="
+  );
+
+  Serial.println(
+    " ConsoleBadger CONFIGURATION MODE"
+  );
+
+  Serial.println(
+    "=========================================="
+  );
+
+  Serial.println(
+    "[AP] Starting Wi-Fi SoftAP..."
+  );
+
+  WiFi.mode(
+    WIFI_AP
+  );
+
+  WiFi.softAPdisconnect(
+    true
+  );
+
+  delay(100);
+
+  IPAddress ip(
+    192,
+    168,
+    4,
+    1
+  );
+
+  IPAddress mask(
+    255,
+    255,
+    255,
+    0
+  );
+
+  bool configOK =
+    WiFi.softAPConfig(
+      ip,
+      ip,
+      mask
+    );
+
+  Serial.print(
+    "[AP] softAPConfig: "
+  );
+
+  Serial.println(
+    configOK
+      ? "OK"
+      : "FAILED"
+  );
+
+  bool apOK =
+    WiFi.softAP(
+      "ConsoleBadger",
+      nullptr,
+      6,
+      false,
+      1
+    );
+
+  Serial.print(
+    "[AP] softAP start: "
+  );
+
+  Serial.println(
+    apOK
+      ? "OK"
+      : "FAILED"
+  );
+
+  if (!apOK)
+  {
+    Serial.println(
+      "[AP] ERROR: SoftAP could not start."
+    );
+
+    while (true)
+      delay(1000);
+  }
+
+  Serial.print(
+    "[AP] SSID: "
+  );
+
+  Serial.println(
+    WiFi.softAPSSID()
+  );
+
+  Serial.print(
+    "[AP] IP: "
+  );
+
+  Serial.println(
+    WiFi.softAPIP()
+  );
+
+  Serial.print(
+    "[AP] Client count: "
+  );
+
+  Serial.println(
+    WiFi.softAPgetStationNum()
+  );
+
+  setupDNS.start(
+    53,
+    "*",
+    ip
+  );
+
+  Serial.println(
+    "[DNS] Captive DNS started."
+  );
+
+  setupServer.on(
+    "/scan",
+    HTTP_GET,
+    handleSetupScan
+  );
+
+  setupServer.on(
+    "/",
+    HTTP_GET,
+    handleSetupRoot
+  );
+
+  setupServer.on(
+    "/save",
+    HTTP_POST,
+    handleSetupSave
+  );
+
+  setupServer.on(
+    "/generate_204",
+    HTTP_GET,
+    handleSetupRoot
+  );
+
+  setupServer.on(
+    "/hotspot-detect.html",
+    HTTP_GET,
+    handleSetupRoot
+  );
+
+  setupServer.on(
+    "/connecttest.txt",
+    HTTP_GET,
+    handleSetupRoot
+  );
+
+  setupServer.onNotFound([](){
+    Serial.print(
+      "[AP] HTTP unknown path: "
+    );
+
+    Serial.println(
+      setupServer.uri()
+    );
+
+    setupServer.sendHeader(
+      "Location",
+      "/",
+      true
+    );
+
+    setupServer.send(
+      302,
+      "text/plain",
+      ""
+    );
+  });
+
+  setupServer.begin();
+
+  Serial.println(
+    "[HTTP] Web server started on port 80."
+  );
+
+  Serial.println(
+    "[AP] READY — connect phone to ConsoleBadger"
+  );
+
+  Serial.println(
+    "[AP] Then use the captive portal."
+  );
+
+  Serial.println(
+    "[AP] Mobile data should be OFF while testing."
+  );
+
+  Serial.println(
+    "=========================================="
+  );
+
+  if (!preserveSetupDisplay)
+    drawSetupScreen();
+}
+
+// ------------------------------------------------------------
+// Retention protection
+// ------------------------------------------------------------
+
+// ------------------------------------------------------------
+// Background home Wi-Fi
+//
+// IMPORTANT:
+// The known-good SD + Xbox boot sequence is already complete before
+// this function is called. This function never clears the screen,
+// never blocks for 20 seconds and never touches the CBP player.
+// ------------------------------------------------------------
+
+static void startHomeWiFiBackground()
+{
+  if (!savedSSID.length())
+  {
+    Serial.println(
+      "[WIFI] No saved network; staying offline."
+    );
+
+    return;
+  }
+
+  Serial.println();
+  Serial.println(
+    "[WIFI] V1.96: starting background home Wi-Fi after profile init..."
+  );
+
+  // V1.61 proven Wi-Fi startup sequence.
+  // Deliberately do NOT force a driver shutdown or WIFI_OFF here.
+  WiFi.mode(
+    WIFI_STA
+  );
+
+  WiFi.setHostname(
+    "consolebadger"
+  );
+
+  WiFi.begin(
+    savedSSID.c_str(),
+    savedPassword.c_str()
+  );
+
+  homeWiFiStarted = true;
+
+  lastHomeWiFiStatus =
+    WiFi.status();
+
+  lastHomeWiFiAttemptMs = millis();
+
+  Serial.println(
+    "[WIFI] Background connection started."
+  );
+}
+
+static void serviceHomeWiFi()
+{
+  if (!homeWiFiStarted)
+    return;
+
+  const wl_status_t status = WiFi.status();
+  const uint32_t now = millis();
+
+  if (status == WL_CONNECTED)
+  {
+    // Immediate UI state: the right status bar must light as soon as the
+    // Wi-Fi STA reports a real connection. The 60-second service remains
+    // the periodic verification pass.
+    profileBarWifiConnected = true;
+
+    if (!homeWiFiReported)
+    {
+      Serial.println("[WIFI] CONNECTED.");
+
+      badgerDiagCheckpoint(
+        DIAG_WIFI_CONNECTED,
+        "WIFI_CONNECTED"
+      );
+
+      Serial.print("[WIFI] IP: ");
+      Serial.println(WiFi.localIP());
+
+      homeWiFiReported = true;
+      profileApiInitialSyncPending = true;
+    }
+
+    return;
+  }
+
+  // Immediate UI state: disconnected means the right status bar is white.
+  // The existing 20-second retry logic below is unchanged.
+  profileBarWifiConnected = false;
+
+  // Non-blocking recovery for a connection attempt that has stalled.
+  // Do not interfere with the TFT/SD animation while waiting.
+  if (now - lastHomeWiFiAttemptMs >= 20000UL)
+  {
+    lastHomeWiFiAttemptMs = now;
+
+    Serial.print("[WIFI] Connection retry; status=");
+    Serial.println((int)status);
+
+    // Retry without tearing down or reinitialising the Wi-Fi driver.
+    WiFi.begin(
+      savedSSID.c_str(),
+      savedPassword.c_str()
+    );
+  }
+}
+
+// ------------------------------------------------------------
+// Live Xbox profile synchronisation
+//
+// The setup GamerTag is the lookup key; live XBL data is the display source.
+// ------------------------------------------------------------
+
+static String urlEncodeProfileValue(
+  const String &value
+)
+{
+  String out;
+
+  for (size_t i = 0; i < value.length(); ++i)
+  {
+    const char c = value[i];
+
+    if (
+      (c >= 'a' && c <= 'z') ||
+      (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') ||
+      c == '-' || c == '_' || c == '.' || c == '~'
+    )
+    {
+      out += c;
+    }
+    else
+    {
+      const char hex[] = "0123456789ABCDEF";
+      out += '%';
+      out += hex[(c >> 4) & 0x0F];
+      out += hex[c & 0x0F];
+    }
+  }
+
+  return out;
+}
+
+static bool extractJsonString(
+  const String &json,
+  const char *key,
+  String &out
+)
+{
+  const String needle = String("\"") + key + "\"";
+  int keyPos = json.indexOf(needle);
+
+  if (keyPos < 0)
+    return false;
+
+  int colon = json.indexOf(':', keyPos + needle.length());
+  if (colon < 0)
+    return false;
+
+  int start = colon + 1;
+  while (start < (int)json.length() &&
+         (json[start] == ' ' || json[start] == '\t' ||
+          json[start] == '\r' || json[start] == '\n'))
+  {
+    ++start;
+  }
+
+  if (start >= (int)json.length() || json[start] != '"')
+    return false;
+
+  ++start;
+  String value;
+  bool escaped = false;
+
+  for (int i = start; i < (int)json.length(); ++i)
+  {
+    const char c = json[i];
+
+    if (escaped)
+    {
+      if (c == '"' || c == '\\' || c == '/')
+        value += c;
+      else if (c == 'n')
+        value += '\n';
+      else if (c == 'r')
+        value += '\r';
+      else if (c == 't')
+        value += '\t';
+      else
+        value += c;
+
+      escaped = false;
+      continue;
+    }
+
+    if (c == '\\')
+    {
+      escaped = true;
+      continue;
+    }
+
+    if (c == '"')
+    {
+      out = value;
+      return true;
+    }
+
+    value += c;
+  }
+
+  return false;
+}
+
+static bool extractJsonUInt32(
+  const String &json,
+  const char *key,
+  uint32_t &out
+)
+{
+  const String needle = String("\"") + key + "\"";
+  int keyPos = json.indexOf(needle);
+
+  if (keyPos < 0)
+    return false;
+
+  int colon = json.indexOf(':', keyPos + needle.length());
+  if (colon < 0)
+    return false;
+
+  int start = colon + 1;
+  while (start < (int)json.length() &&
+         (json[start] == ' ' || json[start] == '\t' ||
+          json[start] == '\r' || json[start] == '\n'))
+  {
+    ++start;
+  }
+
+  unsigned long value = 0;
+  bool haveDigit = false;
+
+  for (int i = start; i < (int)json.length(); ++i)
+  {
+    const char c = json[i];
+
+    if (c < '0' || c > '9')
+      break;
+
+    value = value * 10UL + (unsigned long)(c - '0');
+    haveDigit = true;
+  }
+
+  if (!haveDigit)
+    return false;
+
+  out = (uint32_t)value;
+  return true;
+}
+
+static bool extractJsonUInt32Flexible(
+  const String &json,
+  const char *key,
+  uint32_t &out
+)
+{
+  const String needle = String("\"") + key + "\"";
+  int keyPos = json.indexOf(needle);
+  if (keyPos < 0)
+    return false;
+
+  int colon = json.indexOf(':', keyPos + needle.length());
+  if (colon < 0)
+    return false;
+
+  int start = colon + 1;
+  while (start < (int)json.length() &&
+         (json[start] == ' ' || json[start] == '\t' ||
+          json[start] == '\r' || json[start] == '\n'))
+  {
+    ++start;
+  }
+
+  bool quoted = false;
+  if (start < (int)json.length() && json[start] == '\"')
+  {
+    quoted = true;
+    ++start;
+  }
+
+  unsigned long value = 0;
+  bool haveDigit = false;
+
+  for (int i = start; i < (int)json.length(); ++i)
+  {
+    const char c = json[i];
+    if (c < '0' || c > '9')
+      break;
+    value = value * 10UL + (unsigned long)(c - '0');
+    haveDigit = true;
+  }
+
+  (void)quoted;
+  if (!haveDigit)
+    return false;
+
+  out = (uint32_t)value;
+  return true;
+}
+
+static bool syncProfileNow()
+{
+  badgerDiagCheckpoint(
+    DIAG_SYNC_BEGIN,
+    "SYNC_PROFILE_BEGIN"
+  );
+
+  badgerDiagHeap(
+    "SYNC_PROFILE_BEGIN"
+  );
+
+  Serial.println();
+  Serial.println("[NET] V1.82 OpenXBL profile diagnostic.");
+
+  if (strlen(UPCBADGER_OPENXBL_API_KEY) == 0)
+  {
+    Serial.println("[NET] NO KEY: add your key to local Secrets.h.");
+    return false;
+  }
+
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("[NET] Wi-Fi is not connected.");
+    return false;
+  }
+
+  // ----------------------------------------------------------
+  // STEP 1 — DNS
+  // ----------------------------------------------------------
+  IPAddress resolved;
+  Serial.println("[NET] DNS lookup: api.xbl.io");
+
+  if (!WiFi.hostByName("api.xbl.io", resolved))
+  {
+    Serial.println("[NET] DNS FAILED.");
+    return false;
+  }
+
+  badgerDiagCheckpoint(
+    DIAG_DNS_OK,
+    "DNS_OK"
+  );
+
+  Serial.print("[NET] DNS OK: ");
+  Serial.println(resolved);
+
+  // ----------------------------------------------------------
+  // STEP 2 — plain TCP controls
+  // ----------------------------------------------------------
+  {
+    WiFiClient plain80;
+    plain80.setTimeout(5000);
+
+    Serial.println("[NET] Raw TCP probe: api.xbl.io:80");
+
+    if (!plain80.connect(resolved, 80))
+    {
+      Serial.println("[NET] TCP port 80 FAILED.");
+    }
+    else
+    {
+      Serial.println("[NET] TCP port 80 OK.");
+
+      badgerDiagCheckpoint(
+        DIAG_TCP80_OK,
+        "TCP80_OK"
+      );
+      plain80.stop();
+    }
+  }
+
+  {
+    WiFiClient plain443;
+    plain443.setTimeout(5000);
+
+    Serial.print("[NET] Raw TCP probe: ");
+    Serial.print(resolved);
+    Serial.println(":443");
+
+    if (!plain443.connect(resolved, 443))
+    {
+      Serial.print("[NET] TCP 443 FAILED. errno=");
+      Serial.println(errno);
+      plain443.stop();
+      return false;
+    }
+
+    Serial.println("[NET] TCP 443 OK.");
+
+    badgerDiagCheckpoint(
+      DIAG_TCP443_OK,
+      "TCP443_OK"
+    );
+    plain443.stop();
+  }
+
+  // ----------------------------------------------------------
+  // STEP 3 — TLS handshake with SNI + detailed mbedTLS error
+  // ----------------------------------------------------------
+  {
+    WiFiClientSecure secure;
+    secure.setInsecure();
+    secure.setHandshakeTimeout(8);
+
+    Serial.println("[NET] TLS handshake: api.xbl.io:443");
+
+    if (!secure.connect("api.xbl.io", 443))
+    {
+      char errorBuffer[160] = {0};
+      const int errorCode =
+        secure.lastError(errorBuffer, sizeof(errorBuffer));
+
+      Serial.println("[NET] TLS CONNECT FAILED.");
+      Serial.print("[NET] TLS lastError code: ");
+      Serial.println(errorCode);
+      Serial.print("[NET] TLS lastError text: ");
+      Serial.println(errorBuffer);
+      secure.stop();
+      return false;
+    }
+
+    Serial.println("[NET] TLS CONNECT OK.");
+
+    badgerDiagCheckpoint(
+      DIAG_TLS_OK,
+      "TLS_OK"
+    );
+
+    badgerDiagHeap(
+      "AFTER_TLS_CONNECT"
+    );
+    secure.stop();
+  }
+
+  // ----------------------------------------------------------
+  // STEP 4 — resolve the GamerTag stored in NVS/setup portal.
+  //
+  // IMPORTANT:
+  // /v2/account returns the account associated with the API key. That is
+  // useful for diagnostics but is NOT the product lookup target.
+  // The setup GamerTag is the identity the Badger is configured to show.
+  // ----------------------------------------------------------
+  String requestedGamerTag = savedGamerID;
+  requestedGamerTag.trim();
+
+  if (!requestedGamerTag.length())
+  {
+    Serial.println("[API] No Gamer ID available for lookup.");
+    return false;
+  }
+
+  const String encodedTag = urlEncodeProfileValue(requestedGamerTag);
+
+  badgerDiagCheckpoint(
+    DIAG_XBL_LOOKUP_BEGIN,
+    "XBL_LOOKUP_BEGIN"
+  );
+
+  Serial.print("[API] Lookup GamerTag: ");
+  Serial.println(requestedGamerTag);
+
+  String body;
+  bool lookupOK = false;
+  String lookupEndpoint;
+
+  // Current OpenXBL-compatible endpoint used by the maintained community
+  // client: /api/v2/search/{gamertag}.  Keep a second documented/current
+  // player endpoint fallback in case the API deployment exposes the newer
+  // route instead.
+  const String lookupURLs[] = {
+    String("https://xbl.io/api/v2/search/") + encodedTag,
+    String("https://api.xbl.io/v2/player/gamertag/") + encodedTag,
+    String("https://api.xbl.io/v2/friends/search/") + encodedTag
+  };
+
+  for (uint8_t attempt = 0; attempt < 3 && !lookupOK; ++attempt)
+  {
+    WiFiClientSecure lookupClient;
+    lookupClient.setInsecure();
+    lookupClient.setHandshakeTimeout(8);
+
+    HTTPClient lookupHttp;
+    lookupHttp.setConnectTimeout(5000);
+    lookupHttp.setTimeout(7000);
+
+    Serial.print("[API] GET ");
+    Serial.println(lookupURLs[attempt]);
+
+    if (!lookupHttp.begin(lookupClient, lookupURLs[attempt]))
+    {
+      Serial.println("[API] Lookup HTTP begin failed.");
+      continue;
+    }
+
+    lookupHttp.addHeader("X-Authorization", UPCBADGER_OPENXBL_API_KEY);
+    lookupHttp.addHeader("Accept", "application/json");
+
+    const int lookupCode = lookupHttp.GET();
+
+    badgerDiagCheckpoint(
+      DIAG_XBL_GET_RETURNED,
+      "XBL_GET_RETURNED"
+    );
+
+    Serial.print("[CRASHDIAG] XBL_GET_CODE=");
+    Serial.println(
+      lookupCode
+    );
+
+    Serial.print("[API] Lookup HTTP status: ");
+    Serial.println(lookupCode);
+
+    if (lookupCode == HTTP_CODE_OK)
+    {
+      body = lookupHttp.getString();
+      lookupEndpoint = lookupURLs[attempt];
+      lookupOK = body.length() > 0;
+    }
+    else if (lookupCode < 0)
+    {
+      Serial.print("[API] Lookup transport error: ");
+      Serial.println(lookupHttp.errorToString(lookupCode));
+    }
+
+    lookupHttp.end();
+  }
+
+  if (!lookupOK)
+  {
+    Serial.println("[API] GamerTag lookup FAILED.");
+    return false;
+  }
+
+  Serial.print("[API] Lookup source: ");
+  Serial.println(lookupEndpoint);
+
+  // ----------------------------------------------------------
+  // STEP 5 — parse target player profile.
+  // Handles both the /search people payload and the direct player payload.
+  // ----------------------------------------------------------
+  bool profileChanged = false;
+
+  String foundGamerTag;
+  String foundXUID;
+  String foundPic;
+  String foundPresence;
+  uint32_t foundScore = 0;
+
+  bool gotGamerTag = extractJsonString(body, "gamertag", foundGamerTag);
+  bool gotXUID = extractJsonString(body, "xuid", foundXUID);
+  bool gotPic = extractJsonString(body, "displayPicRaw", foundPic);
+  if (!gotPic) gotPic = extractJsonString(body, "profilePicture", foundPic);
+  bool gotPresence = extractJsonString(body, "presenceState", foundPresence);
+  if (!gotPresence) gotPresence = extractJsonString(body, "state", foundPresence);
+
+  bool gotScore = extractJsonUInt32Flexible(body, "gamerScore", foundScore);
+  if (!gotScore) gotScore = extractJsonUInt32Flexible(body, "gamerscore", foundScore);
+
+  // Search fallback payloads expose a profileUsers/settings object. Use it
+  // only when the direct player fields above were not supplied.
+  if (!gotGamerTag)
+  {
+    const int setting = body.indexOf("\"id\":\"Gamertag\"");
+    if (setting >= 0)
+    {
+      String section = body.substring(setting);
+      gotGamerTag = extractJsonString(section, "value", foundGamerTag);
+    }
+  }
+
+  if (!gotScore)
+  {
+    const int setting = body.indexOf("\"id\":\"Gamerscore\"");
+    if (setting >= 0)
+    {
+      String section = body.substring(setting);
+      gotScore = extractJsonUInt32Flexible(section, "value", foundScore);
+    }
+  }
+
+  if (!gotPic)
+  {
+    const int setting = body.indexOf("\"id\":\"GameDisplayPicRaw\"");
+    if (setting >= 0)
+    {
+      String section = body.substring(setting);
+      gotPic = extractJsonString(section, "value", foundPic);
+    }
+  }
+
+  if (!gotGamerTag)
+  {
+    Serial.println("[API] ERROR: target GamerTag missing from lookup response.");
+    Serial.print("[API] Raw response: ");
+    Serial.println(body.substring(0, 360));
+    return false;
+  }
+
+  foundGamerTag.trim();
+  foundXUID.trim();
+  foundPic.trim();
+  foundPresence.trim();
+
+  if (foundGamerTag.length() > 0 && foundGamerTag != liveGamerID)
+  {
+    liveGamerID = foundGamerTag;
+    profileChanged = true;
+  }
+
+  if (gotXUID && foundXUID != liveXUID)
+  {
+    liveXUID = foundXUID;
+    profileChanged = true;
+  }
+
+  if (gotScore && foundScore != liveGamerScore)
+  {
+    liveGamerScore = foundScore;
+    profileChanged = true;
+  }
+
+  if (gotPic && foundPic != liveGamerPicURL)
+  {
+    liveGamerPicURL = foundPic;
+    profileChanged = true;
+  }
+
+  if (gotPresence)
+  {
+    const bool online =
+      foundPresence.equalsIgnoreCase("Online") ||
+      foundPresence.equalsIgnoreCase("OnlinePresence") ||
+      foundPresence.indexOf("Online") >= 0;
+
+    if (!liveXboxPresenceKnown || online != liveXboxOnline)
+      profileChanged = true;
+
+    liveXboxOnline = online;
+    liveXboxPresenceKnown = true;
+  }
+
+  Serial.print("[API] Live GamerTag: "); Serial.println(liveGamerID);
+  Serial.print("[API] GamerScore: ");
+  Serial.println(gotScore ? String(liveGamerScore) : "UNKNOWN");
+  Serial.print("[API] XUID: ");
+  Serial.println(liveXUID.length() ? liveXUID : "UNKNOWN");
+  Serial.print("[API] Gamerpic: ");
+  Serial.println(liveGamerPicURL.length() ? "AVAILABLE" : "NOT FOUND");
+  Serial.print("[API] Presence: ");
+  Serial.println(liveXboxPresenceKnown ? (liveXboxOnline ? "ONLINE" : "OFFLINE") : "UNKNOWN");
+
+  // If the profile image URL changed or there is no SD cache, fetch it once.
+  if (liveGamerPicURL.length() > 0 &&
+      (liveGamerPicURL != cachedGamerPicURL || !SD.exists(PROFILE_GAMERPIC_FILE)))
+  {
+    if (downloadLiveGamerPicToSD())
+    {
+      cachedGamerPicURL = liveGamerPicURL;
+      profileChanged = true;
+    }
+  }
+
+  // ----------------------------------------------------------
+  // STEP 6 — target XUID presence fallback.
+  //
+  // The search response normally includes presenceState. If it does not,
+  // use the XUID-specific OpenXBL presence route documented by the current
+  // community client, rather than querying the API-key owner's presence.
+  // ----------------------------------------------------------
+  if (!liveXboxPresenceKnown && liveXUID.length() > 0)
+  {
+    WiFiClientSecure presenceClient;
+    presenceClient.setInsecure();
+    presenceClient.setHandshakeTimeout(8);
+
+    HTTPClient presenceHttp;
+    presenceHttp.setConnectTimeout(5000);
+    presenceHttp.setTimeout(7000);
+
+    const String presenceUrl =
+      String("https://xbl.io/api/v2/") + liveXUID + "/presence";
+
+    Serial.print("[API] GET target presence: ");
+    Serial.println(presenceUrl);
+
+    if (presenceHttp.begin(presenceClient, presenceUrl))
+    {
+      presenceHttp.addHeader("X-Authorization", UPCBADGER_OPENXBL_API_KEY);
+      presenceHttp.addHeader("Accept", "application/json");
+
+      const int presenceCode = presenceHttp.GET();
+      Serial.print("[API] Target presence HTTP status: ");
+      Serial.println(presenceCode);
+
+      if (presenceCode == HTTP_CODE_OK)
+      {
+        const String presenceBody = presenceHttp.getString();
+        String state;
+
+        if (extractJsonString(presenceBody, "state", state))
+        {
+          const bool online =
+            state.equalsIgnoreCase("Online") ||
+            state.equalsIgnoreCase("OnlinePresence") ||
+            state.indexOf("Online") >= 0;
+
+          if (!liveXboxPresenceKnown || online != liveXboxOnline)
+            profileChanged = true;
+
+          liveXboxOnline = online;
+          liveXboxPresenceKnown = true;
+          Serial.print("[API] Xbox Live presence: ");
+          Serial.println(liveXboxOnline ? "ONLINE" : "OFFLINE");
+        }
+        else
+        {
+          Serial.println("[API] Target presence response contained no state.");
+        }
+      }
+      else if (presenceCode < 0)
+      {
+        Serial.print("[API] Presence transport error: ");
+        Serial.println(presenceHttp.errorToString(presenceCode));
+      }
+    }
+    else
+    {
+      Serial.println("[API] Target presence HTTP begin failed.");
+    }
+
+    presenceHttp.end();
+
+    badgerDiagCheckpoint(
+      DIAG_PRESENCE_DONE,
+      "PRESENCE_REQUEST_DONE"
+    );
+  }
+
+  profileApiAvailable = true;
+  liveProfileInitialised = true;
+
+  // A successful sync requests a visual commit only when the live profile
+  // actually changed. The first sync changes the empty startup values, so it
+  // naturally commits once.
+  profileGamerOverlayDirty = profileChanged;
+
+  profileBarXblKnown =
+    liveXboxPresenceKnown;
+  profileBarXblOnline =
+    liveXboxPresenceKnown && liveXboxOnline;
+
+  badgerDiagCheckpoint(
+    DIAG_SYNC_COMPLETE,
+    "SYNC_PROFILE_COMPLETE"
+  );
+
+  badgerDiagHeap(
+    "SYNC_PROFILE_COMPLETE"
+  );
+
+  return true;
+}
+
+static bool suspendProfileForNetwork()
+{
+  Serial.println("[MEM] Suspending profile playback for TLS.");
+
+  if (profileAnimFile)
+  {
+    profileAnimFile.close();
+    Serial.println("[MEM] Profile CBP file closed for TLS.");
+  }
+
+  // Prevent the animation service from attempting to render against the
+  // deliberately closed file while the network transaction is in progress.
+  profileAnimReady = false;
+
+  if (stageBuffer)
+  {
+    free(stageBuffer);
+    stageBuffer = nullptr;
+    Serial.println("[MEM] 32 KiB staging buffer released for TLS.");
+  }
+
+  Serial.print("[MEM] After TLS suspension free=");
+  Serial.print(ESP.getFreeHeap());
+  Serial.print(" largest=");
+  Serial.println(ESP.getMaxAllocHeap());
+
+  return true;
+}
+
+static bool restoreProfileAfterNetwork()
+{
+  badgerDiagCheckpoint(
+    DIAG_STAGING_RESTORE_BEGIN,
+    "STAGING_RESTORE_BEGIN"
+  );
+
+  badgerDiagHeap(
+    "BEFORE_STAGING_MALLOC"
+  );
+
+  Serial.print("[MEM] Before staging restore free=");
+  Serial.print(ESP.getFreeHeap());
+  Serial.print(" largest=");
+  Serial.println(ESP.getMaxAllocHeap());
+
+  stageBuffer =
+    (uint8_t *)malloc(STAGE_BUFFER_BYTES);
+
+  if (!stageBuffer)
+  {
+    badgerDiagCheckpoint(
+      DIAG_STAGING_MALLOC_FAIL,
+      "STAGING_MALLOC_FAILED"
+    );
+
+    badgerDiagHeap(
+      "STAGING_MALLOC_FAILED"
+    );
+
+    Serial.println("[MEM] ERROR: could not restore staging buffer after TLS.");
+
+    const bool integrityOK =
+      heap_caps_check_integrity_all(
+        true
+      );
+
+    Serial.print("[CRASHDIAG] HEAP_INTEGRITY=");
+    Serial.println(
+      integrityOK ? "PASS" : "FAIL"
+    );
+    Serial.print("[MEM] Free heap: ");
+    Serial.println(ESP.getFreeHeap());
+    Serial.print("[MEM] Largest free block: ");
+    Serial.println(ESP.getMaxAllocHeap());
+    return false;
+  }
+
+  badgerDiagCheckpoint(
+    DIAG_STAGING_MALLOC_OK,
+    "STAGING_MALLOC_OK"
+  );
+
+  Serial.println("[MEM] 32 KiB staging buffer restored after TLS.");
+
+  badgerDiagHeap(
+    "AFTER_STAGING_MALLOC"
+  );
+
+  if (!loadProfileAnimIndex())
+  {
+    Serial.println("[PROFILE] ERROR: could not reopen master animation after TLS.");
+    free(stageBuffer);
+    stageBuffer = nullptr;
+    return false;
+  }
+
+  profileAnimFrame =
+    (profileAnimFrame >= MASTER_LOOP_START_FRAME &&
+     profileAnimFrame < MASTER_LOOP_END_FRAME)
+      ? profileAnimFrame
+      : MASTER_LOOP_START_FRAME;
+
+  profileAnimNextUs =
+    micros() + PROFILE_ANIM_FRAME_INTERVAL_US;
+
+  badgerDiagCheckpoint(
+    DIAG_STAGING_INDEX_OK,
+    "STAGING_INDEX_OK"
+  );
+
+  Serial.println("[MEM] Profile playback restored.");
+
+  badgerDiagCheckpoint(
+    DIAG_STAGING_RESTORE_DONE,
+    "STAGING_RESTORE_DONE"
+  );
+
+  return true;
+}
+
+static void serviceProfileSync()
+{
+  if (!productProfileActive || !homeWiFiStarted)
+    return;
+
+  uint32_t now = millis();
+
+  if (WiFi.status() != WL_CONNECTED)
+    return;
+
+  bool due = profileApiInitialSyncPending ||
+    (now - lastProfileSyncMs >= PROFILE_SYNC_INTERVAL_MS);
+
+  if (!due)
+    return;
+
+  profileApiInitialSyncPending = false;
+  lastProfileSyncMs = now;
+
+  suspendProfileForNetwork();
+
+  // IMPORTANT: syncProfileNow() owns the TLS/HTTP objects. We do not try to
+  // malloc the animation buffer again until this function has returned and
+  // those objects have therefore been destroyed.
+  const bool success = syncProfileNow();
+
+  if (success)
+    Serial.println("[NET] V1.82 transport path PASS.");
+  else
+    Serial.println("[NET] V1.82 transport path FAILED.");
+
+  if (!restoreProfileAfterNetwork())
+  {
+    // Do not hammer a broken memory state. Leave the network result alone
+    // and retry recovery on the normal sync interval.
+    profileApiInitialSyncPending = false;
+    lastProfileSyncMs = millis();
+    return;
+  }
+
+  // The API result is now available and the animation engine is restored.
+  // Replace the complete static Xbox profile only when live data changed.
+  // Otherwise every profile pixel remains untouched.
+  if (success)
+    lastProfilePresenceCheckMs = millis();
+
+  if (success && profileGamerOverlayDirty && productProfileActive)
+  {
+    refreshProfileFrameAndOverlay(255);
+    Serial.print("[PROFILE] Live profile applied: ");
+    Serial.print(liveGamerID);
+    Serial.print(" / ");
+    Serial.println(liveGamerScore);
+    profileGamerOverlayDirty = false;
+  }
+}
+
+// ============================================================
+// FINAL PRODUCT SETUP / LOOP
+// ============================================================
+
+
+void setup()
+{
+  Serial.begin(115200);
+  delay(300);
+
+  badgerDiagBootReport();
+
+  badgerDiagCheckpoint(
+    DIAG_BOOT_BEGIN,
+    "SETUP_BEGIN"
+  );
+
+  pinMode(
+    CONFIG_BUTTON_PIN,
+    INPUT_PULLUP
+  );
+
+  Serial.println();
+  Serial.println(
+    "=========================================="
+  );
+
+  Serial.println(
+    " UPCBadger v2.36"
+  );
+
+  Serial.println(
+    " KNOWN-GOOD BOOT -> PROFILE -> WIFI"
+  );
+
+  Serial.println(
+    "=========================================="
+  );
+
+  // ==========================================================
+  // KNOWN-GOOD PLAYER STARTUP
+  //
+  // DO NOT rearrange this section.
+  // This is the startup sequence that has already proven that
+  // the SD card can mount and the Xbox animation can play.
+  // ==========================================================
+
+  if (!tft.init())
+  {
+    Serial.println(
+      "[TFT] ERROR: TFT init failed."
+    );
+
+    while (true)
+      delay(1000);
+  }
+
+  tft.setRotation(0);
+  tft.setColorDepth(16);
+  tft.setSwapBytes(false);
+  tft.initDMA();
+  tft.fillScreen(TFT_BLACK);
+
+  badgerDiagCheckpoint(
+    DIAG_TFT_READY,
+    "TFT_READY"
+  );
+
+  // ----------------------------------------------------------
+  // KNOWN-GOOD SD INITIALISATION
+  // ----------------------------------------------------------
+
+  if (!initAnimationStorage())
+  {
+    tft.fillScreen(
+      TFT_BLACK
+    );
+
+    productText(
+      "SD ERROR",
+      180,
+      150,
+      TFT_WHITE,
+      &fonts::Font2
+    );
+
+    productText(
+      "CHECK SD CARD",
+      180,
+      195,
+      TFT_WHITE,
+      &fonts::Font0
+    );
+
+    while (true)
+      delay(1000);
+  }
+
+  // ----------------------------------------------------------
+  // PLAYBACK STAGING
+  //
+  // Allocated AFTER SD initialisation and CBP index validation
+  // (v1.14 change, kept). v1.16 also shrank the buffer itself from
+  // 96 KiB to STAGE_BUFFER_BYTES (32 KiB) - see the comment at its
+  // declaration for why 32 KiB is enough.
+  // ----------------------------------------------------------
+  stageBuffer =
+    (uint8_t *)malloc(
+      STAGE_BUFFER_BYTES
+    );
+
+  if (!stageBuffer)
+  {
+    Serial.println(
+      "[MEM] ERROR: staging allocation failed after SD init."
+    );
+
+    Serial.print("[MEM] Free heap at failure: ");
+    Serial.println(ESP.getFreeHeap());
+
+    Serial.print("[MEM] Largest free block at failure: ");
+    Serial.println(ESP.getMaxAllocHeap());
+
+    tft.fillScreen(TFT_BLACK);
+
+    productText(
+      "MEMORY ERROR",
+      180,
+      150,
+      TFT_WHITE,
+      &fonts::Font2
+    );
+
+    while (true)
+      delay(1000);
+  }
+
+  badgerDiagCheckpoint(
+    DIAG_SD_READY,
+    "SD_AND_STAGING_READY"
+  );
+
+  Serial.println(
+    "[MEM] 32 KiB staging allocated after SD init."
+  );
+
+  // ----------------------------------------------------------
+  // KNOWN-GOOD XBOX BOOT
+  // ----------------------------------------------------------
+
+  if (!playXboxAnimation())
+  {
+    tft.fillScreen(
+      TFT_BLACK
+    );
+
+    productText(
+      "BOOT ERROR",
+      180,
+      150,
+      TFT_WHITE,
+      &fonts::Font2
+    );
+
+    while (true)
+      delay(1000);
+  }
+
+  // ==========================================================
+  // EVERYTHING BELOW THIS LINE IS NEW PRODUCT LAYER
+  // ==========================================================
+
+  Serial.println();
+  Serial.println(
+    "[PRODUCT] Known-good Xbox boot finished."
+  );
+
+  // ----------------------------------------------------------
+  // LOOP MARKER / NVS SETUP CHECK
+  //
+  // The master animation has reached its Gamer ID loop marker.
+  // First-time units pause on that frame while the existing setup AP runs.
+  // Configured units continue directly into the Gamer ID loop.
+  // ----------------------------------------------------------
+
+  if (!loadProfileAnimIndex())
+  {
+    tft.fillScreen(TFT_BLACK);
+
+    profileText(
+      "PROFILE ANIMATION ERROR",
+      180,
+      170,
+      profileWhite(255),
+      &fonts::Font0
+    );
+
+    while (true)
+      delay(1000);
+  }
+
+  bool configured =
+    loadProductSettings();
+
+  if (!configured)
+  {
+    // Show and hold the exact Gamer ID loop-start frame while provisioning.
+    if (!renderProfileAnimationFrame(MASTER_LOOP_START_FRAME))
+    {
+      Serial.println(
+        "[PRODUCT] Could not render setup loop marker frame."
+      );
+    }
+    else
+    {
+      profileAnimFile.close();
+    }
+
+    Serial.println(
+      "[PRODUCT] Setup required. Pausing at Gamer ID loop marker."
+    );
+
+    startConfigMode(true);
+    return;
+  }
+
+  if (digitalRead(CONFIG_BUTTON_PIN) == LOW)
+  {
+    Serial.println(
+      "[PRODUCT] Setup required by config button."
+    );
+
+    startConfigMode(false);
+    return;
+  }
+
+  // V1.64: use the NVS-configured identity immediately.
+  // XBL is an updater, not the initial source of the displayed name.
+  liveGamerID = savedGamerID;
+
+  Serial.print(
+    "[PRODUCT] Gamer ID: "
+  );
+
+  Serial.println(
+    savedGamerID
+  );
+
+  Serial.print(
+    "[PRODUCT] Console: "
+  );
+
+  Serial.println(
+    consoleMode == MODE_XBOX
+      ? "XBOX"
+      : "OTHER"
+  );
+
+  // ----------------------------------------------------------
+  // PROFILE / WI-FI ORDER
+  //
+  // The initial profile render (including gamerpic) is completed
+  // BEFORE background home Wi-Fi is started, matching V1.61.
+  // ----------------------------------------------------------
+
+  // ----------------------------------------------------------
+  // GAMER ID SCREEN
+  // ----------------------------------------------------------
+
+  if (!loadProfileAnimIndex())
+  {
+    tft.fillScreen(TFT_BLACK);
+
+    profileText(
+      "PROFILE ANIMATION ERROR",
+      180,
+      170,
+      profileWhite(255),
+      &fonts::Font0
+    );
+
+    while (true)
+      delay(1000);
+  }
+
+  productProfileActive = true;
+  lastProfileSyncMs = millis();
+  // Arm the first live XBL sync now. serviceProfileSync() will wait
+  // non-blockingly for Wi-Fi to reach CONNECTED, then perform the
+  // existing suspend -> TLS -> restore sequence immediately.
+  profileApiInitialSyncPending = true;
+  profileAnimNextUs = 0;
+
+  if (!drawProfileScreen(255))
+  {
+    while (true)
+      delay(1000);
+  }
+
+  badgerDiagCheckpoint(
+    DIAG_PROFILE_ACTIVE,
+    "PROFILE_SCREEN_ACTIVE"
+  );
+
+  Serial.println(
+    "[PROFILE] Gamer ID screen active."
+  );
+
+  // V1.61-proven Wi-Fi startup. No driver shutdown/WIFI_OFF here.
+  badgerDiagCheckpoint(
+    DIAG_WIFI_START,
+    "WIFI_START"
+  );
+
+  startHomeWiFiBackground();
+
+  Serial.println(
+    "[PRODUCT] Normal operation started."
+  );
+}
+
+void loop()
+{
+  // ----------------------------------------------------------
+  // SETUP MODE
+  // ----------------------------------------------------------
+
+  if (configMode)
+  {
+    setupDNS.processNextRequest();
+    setupServer.handleClient();
+
+    static uint8_t lastClientCount = 255;
+
+    uint8_t clients =
+      WiFi.softAPgetStationNum();
+
+    if (
+      clients !=
+      lastClientCount
+    )
+    {
+      Serial.print(
+        "[AP] Connected clients: "
+      );
+
+      Serial.println(
+        clients
+      );
+
+      lastClientCount =
+        clients;
+    }
+
+    delay(5);
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // PRODUCT MODE
+  // ----------------------------------------------------------
+
+  checkConfigButton();
+
+  serviceHomeWiFi();
+  serviceProfileSync();
+  serviceProfileXblPresence();
+  serviceProfileStatusBars();
+  serviceProfileAnimation();
+
+  {
+    static uint32_t diagLastHeartbeatMs = 0;
+    const uint32_t nowMs = millis();
+
+    if (
+      nowMs - diagLastHeartbeatMs >= 60000UL
+    )
+    {
+      diagLastHeartbeatMs = nowMs;
+
+      badgerDiagCheckpoint(
+        DIAG_RUNTIME_HEARTBEAT,
+        "RUNTIME_HEARTBEAT_60S"
+      );
+    }
+  }
+
+  delay(5);
+}
+
+
