@@ -2,28 +2,21 @@
 
 Updated: 2026-09-29
 
-## Active development — v2.33
+## Active development — v2.34
 
-Latest controlled gamerpic test, based directly on the protected v2.31 physical recovery point.
+Latest controlled gamerpic decoder experiment, based on the protected v2.31 physical recovery point.
 
-### v2.33 changes
-
+### v2.34
 - Keeps the proven Xbox 208x208 gamerpic source.
-- Removes the 72x72 intermediate decode stage.
-- Tests direct 208x208 -> 115x115 RGB565 decode.
-- Keeps the proven 115px circular presentation.
-- Retains the exact v2.07 R/B correction.
-- Gamerpic outer green ring remains removed.
-- No intentional changes to the GamerID, GamerScore, status bars, Wi-Fi, XBL, SD, CBP, TLS/memory recovery, animation timing, display geometry or hardware pins.
-- v2.32 direct 208x208 -> 127x127 decode failed at the PNG decode stage and produced no gamerpic.
+- Uses the recovered v1.85 static-Pngle architecture inside the existing 64 KiB animation workspace.
+- Streams the PNG and bilinearly downsamples 208x208 -> 127px circular presentation.
+- No 127x127 framebuffer is allocated.
+- Existing R/B correction and product/UI/network/animation architecture remain unchanged.
+- v2.32 direct 208->127 and v2.33 direct 208->115 LovyanGFX scaled-sprite tests failed at PNG decode.
 
-### Protected v2.31 recovery point
-
-V2.31 remains the protected physical recovery point and is not overwritten by the v2.33 experiment.
-
-### Development rule
-
-Subsequent revisions should change one controlled element at a time and be physically compiled/tested before becoming the new baseline.
+### Protected recovery
+- v2.31 remains the protected physical rollback point.
+- v2.31 recovery snapshot: 02_KNOWN_GOOD/RECOVERY_V2.31_2026-09-29/
 
 ## Secret handling
 
