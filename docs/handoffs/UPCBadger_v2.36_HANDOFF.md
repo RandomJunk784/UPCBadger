@@ -1,0 +1,1 @@
+See Library handoff for the controlled v2.36 area-resampling experiment. v2.36 is a compile-order repair of v2.35 with the same 208->127 area algorithm; v2.31 remains protected recovery.
