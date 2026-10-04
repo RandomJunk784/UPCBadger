@@ -1,0 +1,6 @@
+<PARSED TEXT FOR SHEET: 1 / 1 TABS
+TAB NAME: partitions_16MB_LittleFS.csv>index,# Name,   Type, SubType, Offset,   Size,     Flags
+0,nvs,      data, nvs,     0x9000,   0x5000,
+1,otadata,  data, ota,     0xE000,   0x2000,
+2,app0,     app,  factory, 0x10000,  0x200000,
+3,spiffs,   data, spiffs,  0x210000, 0xDF0000,
